@@ -1,50 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createSeedDailyReport, type DailyReport, type DailyReportHistoryEntry } from "@/lib/market-report";
+import {
+  createSeedDailyReport,
+  todayKey,
+  type DailyReport,
+  type DailyReportHistoryEntry,
+  type MarketCapFilter,
+  type ReportSource,
+} from "@/lib/market-report";
 
 type Tab = "Calendar" | "Earnings" | "Movers" | "Options";
-type MarketCapFilter = "all" | "10b" | "100b";
-
-type CalendarEvent = {
-  time: string;
-  session: string;
-  name: string;
-  category: string;
-  consensus: string;
-  previous: string;
-  actual?: string;
-  surprise?: string;
-};
-
-type EarningsRow = {
-  ticker: string;
-  company: string;
-  marketCap: number;
-  reportTime: string;
-  epsEstimate: string;
-  epsActual: string;
-  revenueEstimate: string;
-  revenueActual: string;
-};
-
-type MoverRow = {
-  ticker: string;
-  company: string;
-  marketCap: number;
-  percentChange: number;
-  dollarChange: number;
-  volume: number;
-};
-
-type OptionsRow = {
-  ticker: string;
-  company: string;
-  marketCap: number;
-  unusualVolume: string;
-  ivRank: number;
-  putCallRatio: number;
-};
 
 type NoticeTone = "info" | "success" | "warning" | "error";
 
@@ -60,174 +26,6 @@ const marketCapOptions: Array<{ value: MarketCapFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "10b", label: ">$10B" },
   { value: "100b", label: ">$100B" },
-];
-
-const heroFacts = [
-  "CPI 8:30 AM ET · consensus 3.1%",
-  "FOMC: no meeting today",
-  "NVDA top mover +6.2%",
-  "Options flow: elevated call activity in semis",
-];
-
-const calendarEvents: CalendarEvent[] = [
-  {
-    time: "08:30",
-    session: "Pre-market",
-    name: "Core CPI",
-    category: "Macro",
-    consensus: "3.1%",
-    previous: "3.2%",
-    actual: "3.0%",
-    surprise: "-0.1",
-  },
-  {
-    time: "10:00",
-    session: "Market hours",
-    name: "Consumer Sentiment",
-    category: "Survey",
-    consensus: "68.4",
-    previous: "67.1",
-  },
-  {
-    time: "16:05",
-    session: "After close",
-    name: "AAPL earnings",
-    category: "Earnings",
-    consensus: "$1.41 EPS",
-    previous: "$1.29 EPS",
-  },
-];
-
-const earningsRows: EarningsRow[] = [
-  {
-    ticker: "NVDA",
-    company: "NVIDIA",
-    marketCap: 3_400_000_000_000,
-    reportTime: "AMC",
-    epsEstimate: "$1.10",
-    epsActual: "$1.18",
-    revenueEstimate: "$28.7B",
-    revenueActual: "$29.8B",
-  },
-  {
-    ticker: "AAPL",
-    company: "Apple",
-    marketCap: 3_050_000_000_000,
-    reportTime: "AMC",
-    epsEstimate: "$1.41",
-    epsActual: "$1.44",
-    revenueEstimate: "$89.6B",
-    revenueActual: "$90.2B",
-  },
-  {
-    ticker: "META",
-    company: "Meta Platforms",
-    marketCap: 1_330_000_000_000,
-    reportTime: "BMO",
-    epsEstimate: "$4.72",
-    epsActual: "$4.61",
-    revenueEstimate: "$39.1B",
-    revenueActual: "$38.6B",
-  },
-  {
-    ticker: "AMD",
-    company: "Advanced Micro Devices",
-    marketCap: 285_000_000_000,
-    reportTime: "AMC",
-    epsEstimate: "$0.68",
-    epsActual: "$0.74",
-    revenueEstimate: "$6.8B",
-    revenueActual: "$7.1B",
-  },
-];
-
-const gainers: MoverRow[] = [
-  {
-    ticker: "NVDA",
-    company: "NVIDIA",
-    marketCap: 3_400_000_000_000,
-    percentChange: 6.2,
-    dollarChange: 81.43,
-    volume: 92,
-  },
-  {
-    ticker: "AMD",
-    company: "Advanced Micro Devices",
-    marketCap: 285_000_000_000,
-    percentChange: 4.1,
-    dollarChange: 6.73,
-    volume: 67,
-  },
-  {
-    ticker: "MU",
-    company: "Micron",
-    marketCap: 145_000_000_000,
-    percentChange: 3.5,
-    dollarChange: 5.18,
-    volume: 54,
-  },
-];
-
-const losers: MoverRow[] = [
-  {
-    ticker: "TSLA",
-    company: "Tesla",
-    marketCap: 700_000_000_000,
-    percentChange: -4.4,
-    dollarChange: -12.87,
-    volume: 88,
-  },
-  {
-    ticker: "SNAP",
-    company: "Snap",
-    marketCap: 18_000_000_000,
-    percentChange: -3.1,
-    dollarChange: -0.52,
-    volume: 41,
-  },
-  {
-    ticker: "UBER",
-    company: "Uber Technologies",
-    marketCap: 165_000_000_000,
-    percentChange: -2.7,
-    dollarChange: -2.18,
-    volume: 58,
-  },
-];
-
-const optionsRows: OptionsRow[] = [
-  {
-    ticker: "NVDA",
-    company: "NVIDIA",
-    marketCap: 3_400_000_000_000,
-    unusualVolume: "12.4x avg",
-    ivRank: 61,
-    putCallRatio: 0.71,
-  },
-  {
-    ticker: "AAPL",
-    company: "Apple",
-    marketCap: 3_050_000_000_000,
-    unusualVolume: "5.8x avg",
-    ivRank: 38,
-    putCallRatio: 0.94,
-  },
-  {
-    ticker: "TSLA",
-    company: "Tesla",
-    marketCap: 700_000_000_000,
-    unusualVolume: "9.1x avg",
-    ivRank: 74,
-    putCallRatio: 1.18,
-  },
-  {
-    ticker: "AMD",
-    company: "Advanced Micro Devices",
-    marketCap: 285_000_000_000,
-    unusualVolume: "7.3x avg",
-    ivRank: 52,
-    putCallRatio: 0.86,
-  },
 ];
 
 function formatMarketCap(value: number) {
@@ -310,8 +108,16 @@ function buildStatusMessage(response: Response, fallback: string) {
   return `${response.status} ${response.statusText || fallback}`.trim();
 }
 
-function todayKey(date = new Date()) {
-  return date.toISOString().slice(0, 10);
+function describeReportSource(source: ReportSource | undefined) {
+  if (source === "live") {
+    return "Live data";
+  }
+
+  if (source === "mixed") {
+    return "Live + fallback";
+  }
+
+  return "Seed data";
 }
 
 function formatSelectedDate(value: string) {
@@ -454,8 +260,12 @@ export default function Home() {
         ]);
 
         if (historyResponse.ok) {
-          const historyPayload = (await historyResponse.json()) as { history?: DailyReportHistoryEntry[] };
+          const historyPayload = (await historyResponse.json()) as { history?: DailyReportHistoryEntry[]; warning?: string };
           setReportDates((historyPayload.history ?? []).map((entry) => entry.date));
+
+          if (historyPayload.warning && !cancelled) {
+            pushNotice("warning", "Report history unavailable", historyPayload.warning);
+          }
         } else {
           const message = buildStatusMessage(historyResponse, "Unable to load report history");
           setLoadError(message);
@@ -463,23 +273,26 @@ export default function Home() {
         }
 
         if (reportResponse.ok) {
-          const payload = (await reportResponse.json()) as DailyReport;
+          const payload = (await reportResponse.json()) as DailyReport & { warning?: string };
+          const payloadSource = payload.source ?? (payload.status === "failed" ? "seed" : "mixed");
 
           if (!cancelled) {
             setReport(payload);
             setLoadError(null);
 
-            if (payload.status === "partial") {
+            if (payload.warning) {
+              pushNotice("warning", "Fallback report loaded", payload.warning);
+            } else if (payloadSource === "seed") {
+              pushNotice(
+                "warning",
+                "Seed data loaded",
+                "MongoDB or the live sources were unavailable, so this report is showing fallback data.",
+              );
+            } else if (payloadSource === "mixed") {
               pushNotice(
                 "warning",
                 "Partial market data",
-                "One or more live feeds returned empty data, so this report is partially filled from fallback values.",
-              );
-            } else if (payload.status === "failed") {
-              pushNotice(
-                "error",
-                "Market data failed",
-                "Live market APIs failed for this report. The UI is showing fallback data until the source recovers.",
+                "Some live feeds returned data and some fell back to seed values. Check the source badge for the current mix.",
               );
             }
           }
@@ -491,6 +304,10 @@ export default function Home() {
           const message = buildStatusMessage(reportResponse, "Unable to load report");
           setLoadError(message);
           pushNotice("warning", "Report fetch failed", message);
+        }
+
+        if (reportResponse.status === 404 && !cancelled) {
+          pushNotice("info", "No stored report", `${formatSelectedDate(selectedDate)} was not in MongoDB. Generating it now.`);
         }
 
         const refreshResponse = await fetch("/api/refresh", {
@@ -531,6 +348,10 @@ export default function Home() {
 
           if (payload.warning) {
             pushNotice("warning", "Report saved without persistence", payload.warning);
+          } else if (payload.report.source === "seed") {
+            pushNotice("warning", "Seed data loaded", "The refresh completed, but the report had to fall back to seed data.");
+          } else if (payload.report.source === "mixed") {
+            pushNotice("warning", "Partial live data", "The refresh succeeded, but some sections still used fallback values.");
           } else {
             pushNotice("success", "Report refreshed", `Loaded ${formatSelectedDate(selectedDate)} successfully.`);
           }
@@ -569,6 +390,14 @@ export default function Home() {
         : "bg-rose-400";
   const statusLabel =
     report.status === "fresh" ? "Live data fresh" : report.status === "partial" ? "Partial data" : "Data error";
+  const sourceKind = report.source ?? (report.status === "failed" ? "seed" : "mixed");
+  const sourceLabel = describeReportSource(sourceKind);
+  const sourceTone =
+    sourceKind === "live"
+      ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+      : sourceKind === "mixed"
+        ? "border-amber-400/30 bg-amber-400/10 text-amber-100"
+        : "border-rose-400/30 bg-rose-400/10 text-rose-100";
 
   const filteredEarnings = useMemo(
     () => report.earningsRows.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
@@ -809,6 +638,9 @@ export default function Home() {
           <div className="flex items-center gap-2">
             <span className={`h-2 w-2 rounded-full ${statusTone}`} />
             <span>{loadError ?? statusLabel}</span>
+            <span className={`border px-2 py-0.5 text-[10px] uppercase tracking-[0.24em] ${sourceTone}`}>
+              {sourceLabel}
+            </span>
           </div>
           <div className="font-mono text-zinc-500">
             {loadingReport ? "Loading report..." : `${formatSelectedDate(selectedDate)} · updated ${minutesSinceRefresh}m ago`}

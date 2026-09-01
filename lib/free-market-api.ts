@@ -4,6 +4,7 @@ import {
   type DailyReport,
   type EarningsRow,
   type MoverRow,
+  todayKey,
 } from "@/lib/market-report";
 
 type FmpMover = {
@@ -56,10 +57,6 @@ type FmpEconomicEvent = {
 
 const fmpApiKey = process.env.FMP_API_KEY;
 const fmpBaseUrl = process.env.FMP_BASE_URL ?? "https://financialmodelingprep.com/api/v3";
-
-function todayKey(date = new Date()) {
-  return date.toISOString().slice(0, 10);
-}
 
 function toNumber(value: unknown) {
   if (typeof value === "number") {
@@ -168,6 +165,11 @@ function normalizeMoverRows(rows: MoverRow[]) {
   }));
 }
 
+type LiveSection<T> = {
+  data: T;
+  live: boolean;
+};
+
 function mapEconomicEvent(event: FmpEconomicEvent): CalendarEvent | null {
   const name = event.event ?? event.name;
   if (!name) {
@@ -270,17 +272,21 @@ function deriveSession(time: string) {
   return "Market hours";
 }
 
-async function fetchMovers(kind: "gainers" | "losers") {
+async function fetchMovers(kind: "gainers" | "losers"): Promise<LiveSection<MoverRow[]>> {
   const rows = await fetchJson<FmpMover[]>(`/stock_market/${kind}`);
+  if (!rows) {
+    return { data: [], live: false };
+  }
+
   const mapped = (rows ?? []).map(mapMover).filter((row): row is MoverRow => Boolean(row));
-  return normalizeMoverRows(mapped).slice(0, 8);
+  return { data: normalizeMoverRows(mapped).slice(0, 8), live: true };
 }
 
-async function fetchEarnings(date: Date) {
+async function fetchEarnings(date: Date): Promise<LiveSection<EarningsRow[]>> {
   const dateKey = todayKey(date);
   const rows = await fetchJson<FmpEarnings[]>(`/earning_calendar?from=${dateKey}&to=${dateKey}`);
-  if (!rows?.length) {
-    return null;
+  if (!rows) {
+    return { data: [], live: false };
   }
 
   const symbols = [...new Set(rows.map((row) => row.symbol).filter(Boolean))] as string[];
@@ -315,7 +321,7 @@ async function fetchEarnings(date: Date) {
     .sort((left, right) => right.marketCap - left.marketCap)
     .slice(0, 10);
 
-  return mapped.length ? mapped : null;
+  return { data: mapped, live: true };
 }
 
 function normalizeEarningsTime(time?: string) {
@@ -336,9 +342,13 @@ function normalizeEarningsTime(time?: string) {
   return time.toUpperCase();
 }
 
-async function fetchEconomicCalendar(date: Date) {
+async function fetchEconomicCalendar(date: Date): Promise<LiveSection<CalendarEvent[]>> {
   const dateKey = todayKey(date);
   const rows = await fetchJson<FmpEconomicEvent[]>(`/economic_calendar?from=${dateKey}&to=${dateKey}`);
+
+  if (!rows) {
+    return { data: [], live: false };
+  }
 
   const mapped = (rows ?? [])
     .filter((row) => !row.country || row.country === "US")
@@ -347,7 +357,7 @@ async function fetchEconomicCalendar(date: Date) {
     .filter((row) => row.category !== "Macro" || row.name.toLowerCase().includes("fed"))
     .slice(0, 8);
 
-  return mapped.length ? mapped : null;
+  return { data: mapped, live: true };
 }
 
 function buildHeroFacts(report: DailyReport) {
@@ -380,17 +390,18 @@ export async function buildLiveDailyReport(date = new Date()): Promise<DailyRepo
     fetchEconomicCalendar(date),
   ]);
 
-  const livePieces = [gainers, losers, earningsRows, calendarEvents].filter(Boolean).length;
+  const liveSections = [gainers.live, losers.live, earningsRows.live, calendarEvents.live].filter(Boolean).length;
 
   const report: DailyReport = {
     ...fallback,
-    status: livePieces === 4 ? "fresh" : livePieces > 0 ? "partial" : "failed",
+    status: liveSections === 4 ? "fresh" : liveSections > 0 ? "partial" : "failed",
+    source: liveSections > 0 ? "mixed" : "seed",
     refreshedAt: date.toISOString(),
     lastFetchedAt: date.toISOString(),
-    gainers: gainers ?? fallback.gainers,
-    losers: losers ?? fallback.losers,
-    earningsRows: earningsRows ?? fallback.earningsRows,
-    calendarEvents: calendarEvents ?? fallback.calendarEvents,
+    gainers: gainers.live ? gainers.data : fallback.gainers,
+    losers: losers.live ? losers.data : fallback.losers,
+    earningsRows: earningsRows.live ? earningsRows.data : fallback.earningsRows,
+    calendarEvents: calendarEvents.live ? calendarEvents.data : fallback.calendarEvents,
   };
 
   report.heroFacts = buildHeroFacts(report);

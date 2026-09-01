@@ -12,7 +12,7 @@ function parseLimit(value: string | null) {
     return 5;
   }
 
-  return Math.min(parsed, 20);
+  return Math.min(parsed, 180);
 }
 
 export async function GET(request: Request) {
@@ -29,10 +29,18 @@ export async function GET(request: Request) {
       .limit(limit)
       .toArray();
 
-    const history: DailyReportHistoryEntry[] = reports.map((report) => buildHistoryEntry(report as unknown as DailyReport));
+    const history: DailyReportHistoryEntry[] = reports.map((report) =>
+      buildHistoryEntry({
+        ...(report as DailyReport),
+        source: (report as DailyReport).source ?? "mixed",
+      }),
+    );
 
     return NextResponse.json({ history });
   } catch {
-    return NextResponse.json({ history: [] as DailyReportHistoryEntry[] });
+    return NextResponse.json({
+      history: [] as DailyReportHistoryEntry[],
+      warning: "History unavailable while the database connection is down.",
+    });
   }
 }

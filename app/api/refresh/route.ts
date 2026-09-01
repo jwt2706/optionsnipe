@@ -1,16 +1,13 @@
 import { NextResponse } from "next/server";
 
 import { buildLiveDailyReport } from "@/lib/free-market-api";
+import { todayKey } from "@/lib/market-report";
 import { getDatabase } from "@/lib/mongodb";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const refreshCooldownMinutes = 3;
-
-function todayKey(date = new Date()) {
-  return date.toISOString().slice(0, 10);
-}
 
 async function resolveRequestedDate(request: Request) {
   try {

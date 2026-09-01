@@ -40,9 +40,12 @@ export type OptionsRow = {
   putCallRatio: number;
 };
 
+export type ReportSource = "seed" | "mixed" | "live";
+
 export type DailyReport = {
   date: string;
   status: "fresh" | "partial" | "failed";
+  source: ReportSource;
   refreshedAt: string;
   lastFetchedAt: string;
   heroFacts: string[];
@@ -51,17 +54,16 @@ export type DailyReport = {
   gainers: MoverRow[];
   losers: MoverRow[];
   optionsRows: OptionsRow[];
-  marketCapFilter: MarketCapFilter;
 };
 
 export type DailyReportHistoryEntry = {
   date: string;
   status: DailyReport["status"];
+  source: ReportSource;
   refreshedAt: string;
   headline: string;
   topMover: string;
   topEvent: string;
-  marketCapFilter: MarketCapFilter;
 };
 
 const heroFacts = [
@@ -232,8 +234,12 @@ const optionsRows: OptionsRow[] = [
   },
 ];
 
-function todayKey(date = new Date()) {
-  return date.toISOString().slice(0, 10);
+export function todayKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
 }
 
 export function createSeedDailyReport(date = new Date()): DailyReport {
@@ -242,6 +248,7 @@ export function createSeedDailyReport(date = new Date()): DailyReport {
   return {
     date: todayKey(date),
     status: "fresh",
+    source: "seed",
     refreshedAt: timestamp,
     lastFetchedAt: timestamp,
     heroFacts,
@@ -250,7 +257,6 @@ export function createSeedDailyReport(date = new Date()): DailyReport {
     gainers,
     losers,
     optionsRows,
-    marketCapFilter: "10b",
   };
 }
 
@@ -258,6 +264,7 @@ export function buildHistoryEntry(report: DailyReport): DailyReportHistoryEntry 
   return {
     date: report.date,
     status: report.status,
+    source: report.source,
     refreshedAt: report.refreshedAt,
     headline: report.heroFacts[0] ?? "Daily market brief",
     topMover:
@@ -268,6 +275,5 @@ export function buildHistoryEntry(report: DailyReport): DailyReportHistoryEntry 
       report.calendarEvents[0]
         ? `${report.calendarEvents[0].time} ${report.calendarEvents[0].name}`
         : "No calendar event",
-    marketCapFilter: report.marketCapFilter,
   };
 }

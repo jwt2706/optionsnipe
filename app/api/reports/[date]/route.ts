@@ -22,8 +22,17 @@ export async function GET(_request: Request, context: RouteContext) {
       return NextResponse.json({ error: "Report not found" }, { status: 404 });
     }
 
-    return NextResponse.json(report);
+    return NextResponse.json({
+      ...report,
+      source: report.source ?? "mixed",
+    });
   } catch {
-    return NextResponse.json(createSeedDailyReport(new Date(`${date}T12:00:00Z`)), { status: 200 });
+    return NextResponse.json(
+      {
+        ...createSeedDailyReport(new Date(`${date}T12:00:00Z`)),
+        warning: "Database unavailable; returning seed fallback data.",
+      },
+      { status: 200 },
+    );
   }
 }
