@@ -54,6 +54,16 @@ export type DailyReport = {
   marketCapFilter: MarketCapFilter;
 };
 
+export type DailyReportHistoryEntry = {
+  date: string;
+  status: DailyReport["status"];
+  refreshedAt: string;
+  headline: string;
+  topMover: string;
+  topEvent: string;
+  marketCapFilter: MarketCapFilter;
+};
+
 const heroFacts = [
   "CPI 8:30 AM ET · consensus 3.1%",
   "FOMC: no meeting today",
@@ -241,5 +251,23 @@ export function createSeedDailyReport(date = new Date()): DailyReport {
     losers,
     optionsRows,
     marketCapFilter: "10b",
+  };
+}
+
+export function buildHistoryEntry(report: DailyReport): DailyReportHistoryEntry {
+  return {
+    date: report.date,
+    status: report.status,
+    refreshedAt: report.refreshedAt,
+    headline: report.heroFacts[0] ?? "Daily market brief",
+    topMover:
+      report.gainers[0]
+        ? `${report.gainers[0].ticker} +${report.gainers[0].percentChange.toFixed(1)}%`
+        : "No mover data",
+    topEvent:
+      report.calendarEvents[0]
+        ? `${report.calendarEvents[0].time} ${report.calendarEvents[0].name}`
+        : "No calendar event",
+    marketCapFilter: report.marketCapFilter,
   };
 }

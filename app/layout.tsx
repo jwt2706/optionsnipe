@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Market Scout",
+  title: "Optionsnipe",
   description: "Daily market briefing dashboard for calendar, earnings, movers, and options.",
 };
 

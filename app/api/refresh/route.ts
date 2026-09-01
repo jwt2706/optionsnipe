@@ -12,10 +12,21 @@ function todayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
 
-export async function POST() {
+async function resolveRequestedDate(request: Request) {
+  try {
+    const payload = (await request.json()) as { date?: string } | null;
+    const date = payload?.date;
+
+    return date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : todayKey();
+  } catch {
+    return todayKey();
+  }
+}
+
+export async function POST(request: Request) {
   const database = await getDatabase();
   const now = new Date();
-  const date = todayKey(now);
+  const date = await resolveRequestedDate(request);
   const locks = database.collection("refreshLocks");
   const currentLock = await locks.findOne({ date }, { projection: { _id: 0 } });
 
@@ -41,7 +52,7 @@ export async function POST() {
 
   const refreshedAt = now.toISOString();
   const lockedUntil = new Date(now.getTime() + refreshCooldownMinutes * 60 * 1000).toISOString();
-  const report = await buildLiveDailyReport(now);
+  const report = await buildLiveDailyReport(new Date(`${date}T12:00:00Z`));
 
   await Promise.all([
     database.collection("dailyReports").updateOne(
