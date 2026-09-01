@@ -27,7 +27,7 @@ export async function GET(request: Request) {
     .limit(limit)
     .toArray();
 
-  const history: DailyReportHistoryEntry[] = reports.map((report) => buildHistoryEntry(report as DailyReport));
+  const history: DailyReportHistoryEntry[] = reports.map((report) => buildHistoryEntry(report as unknown as DailyReport));
 
   return NextResponse.json({ history });
 }

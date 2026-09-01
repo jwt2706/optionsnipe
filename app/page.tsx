@@ -264,7 +264,7 @@ function Delta({ value }: { value: number }) {
   );
 }
 
-function SectionHeading({ title, subtitle }: { title: string; subtitle: string }) {
+function SectionHeading({ title }: { title: string }) {
   return (
     <div className="flex flex-col gap-1">
       <h2 className="text-sm font-medium uppercase tracking-[0.28em] text-zinc-400">
@@ -840,7 +840,7 @@ export default function Home() {
 
               <div className="hidden overflow-hidden border border-white/8 md:block">
                 <table className="w-full border-collapse text-left text-sm">
-                  <thead className="sticky top-[124px] z-10 bg-[#0a0c10] text-xs uppercase tracking-[0.2em] text-zinc-500">
+                  <thead className="sticky z-10 bg-[#0a0c10] text-xs uppercase tracking-[0.2em] text-zinc-500">
                     <tr className="border-b border-white/8">
                       <th className="px-4 py-3">Ticker</th>
                       <th className="px-4 py-3">Company</th>
@@ -1009,7 +1009,7 @@ export default function Home() {
 
               <div className="hidden overflow-hidden border border-white/8 md:block">
                 <table className="w-full text-left text-sm">
-                  <thead className="sticky top-[124px] z-10 bg-[#0a0c10] text-xs uppercase tracking-[0.2em] text-zinc-500">
+                  <thead className="sticky z-10 bg-[#0a0c10] text-xs uppercase tracking-[0.2em] text-zinc-500">
                     <tr className="border-b border-white/8">
                       <th className="px-4 py-3">Ticker</th>
                       <th className="px-4 py-3">Unusual Volume</th>
