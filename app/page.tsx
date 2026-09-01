@@ -46,6 +46,15 @@ type OptionsRow = {
   putCallRatio: number;
 };
 
+type NoticeTone = "info" | "success" | "warning" | "error";
+
+type Notice = {
+  id: number;
+  tone: NoticeTone;
+  title: string;
+  message: string;
+};
+
 const tabs: Tab[] = ["Calendar", "Earnings", "Movers", "Options"];
 const marketCapOptions: Array<{ value: MarketCapFilter; label: string }> = [
   { value: "all", label: "All" },
@@ -289,6 +298,18 @@ function normalizeTab(value: string | null): Tab {
   return value === "Earnings" || value === "Movers" || value === "Options" ? value : "Calendar";
 }
 
+function normalizeErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
+function buildStatusMessage(response: Response, fallback: string) {
+  return `${response.status} ${response.statusText || fallback}`.trim();
+}
+
 function todayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
@@ -353,6 +374,8 @@ export default function Home() {
   const [reportDates, setReportDates] = useState<string[]>([]);
   const [loadingReport, setLoadingReport] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [notices, setNotices] = useState<Notice[]>([]);
+  const noticeIdRef = useRef(0);
   const [activeTab, setActiveTab] = useState<Tab>("Calendar");
   const [marketCapFilter, setMarketCapFilter] = useState<MarketCapFilter>("10b");
   const [refreshing, setRefreshing] = useState(false);
@@ -361,6 +384,20 @@ export default function Home() {
   const [selectedDate, setSelectedDate] = useState(() => todayKey());
   const dateButtonRef = useRef<HTMLButtonElement | null>(null);
   const datePopoverRef = useRef<HTMLDivElement | null>(null);
+
+  const pushNotice = (tone: NoticeTone, title: string, message: string) => {
+    const id = ++noticeIdRef.current;
+
+    setNotices((current) => [...current, { id, tone, title, message }]);
+
+    window.setTimeout(() => {
+      setNotices((current) => current.filter((notice) => notice.id !== id));
+    }, 5200);
+  };
+
+  const clearNotice = (id: number) => {
+    setNotices((current) => current.filter((notice) => notice.id !== id));
+  };
 
   useEffect(() => {
     if (isFutureDate(selectedDate)) {
@@ -419,6 +456,10 @@ export default function Home() {
         if (historyResponse.ok) {
           const historyPayload = (await historyResponse.json()) as { history?: DailyReportHistoryEntry[] };
           setReportDates((historyPayload.history ?? []).map((entry) => entry.date));
+        } else {
+          const message = buildStatusMessage(historyResponse, "Unable to load report history");
+          setLoadError(message);
+          pushNotice("warning", "Calendar history unavailable", message);
         }
 
         if (reportResponse.ok) {
@@ -427,9 +468,29 @@ export default function Home() {
           if (!cancelled) {
             setReport(payload);
             setLoadError(null);
+
+            if (payload.status === "partial") {
+              pushNotice(
+                "warning",
+                "Partial market data",
+                "One or more live feeds returned empty data, so this report is partially filled from fallback values.",
+              );
+            } else if (payload.status === "failed") {
+              pushNotice(
+                "error",
+                "Market data failed",
+                "Live market APIs failed for this report. The UI is showing fallback data until the source recovers.",
+              );
+            }
           }
 
           return;
+        }
+
+        if (!reportResponse.ok && reportResponse.status !== 404) {
+          const message = buildStatusMessage(reportResponse, "Unable to load report");
+          setLoadError(message);
+          pushNotice("warning", "Report fetch failed", message);
         }
 
         const refreshResponse = await fetch("/api/refresh", {
@@ -441,18 +502,44 @@ export default function Home() {
         });
 
         if (!refreshResponse.ok) {
-          throw new Error("Failed to load report");
+          const errorPayload = (await refreshResponse.json().catch(() => null)) as
+            | { error?: string; warning?: string; retryAfterSeconds?: number }
+            | null;
+          const retryMessage =
+            typeof errorPayload?.retryAfterSeconds === "number"
+              ? `Retry in ${errorPayload.retryAfterSeconds}s`
+              : null;
+          const message = [
+            errorPayload?.error ?? buildStatusMessage(refreshResponse, "Failed to refresh report"),
+            errorPayload?.warning,
+            retryMessage,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+
+          throw new Error(message || "Failed to load report");
         }
 
-        const payload = (await refreshResponse.json()) as { report?: DailyReport };
+        const payload = (await refreshResponse.json()) as {
+          report?: DailyReport;
+          warning?: string;
+        };
 
         if (!cancelled && payload.report) {
           setReport(payload.report);
           setLoadError(null);
+
+          if (payload.warning) {
+            pushNotice("warning", "Report saved without persistence", payload.warning);
+          } else {
+            pushNotice("success", "Report refreshed", `Loaded ${formatSelectedDate(selectedDate)} successfully.`);
+          }
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
-          setLoadError("Live market data is unavailable right now; showing cached fallback data.");
+          const message = normalizeErrorMessage(error, "Live market data is unavailable right now; showing cached fallback data.");
+          setLoadError(message);
+          pushNotice("error", "Report load failed", message);
         }
       } finally {
         if (!cancelled) {
@@ -505,6 +592,7 @@ export default function Home() {
 
   const handleRefresh = async () => {
     if (refreshLocked) {
+      pushNotice("info", "Refresh paused", "This report was refreshed recently. Try again in a moment.");
       return;
     }
 
@@ -519,14 +607,33 @@ export default function Home() {
         body: JSON.stringify({ date: selectedDate }),
       });
 
-      const payload = (await response.json()) as { report?: DailyReport };
+      const payload = (await response.json()) as {
+        report?: DailyReport;
+        warning?: string;
+      };
 
       if (response.ok && payload.report) {
         setReport(payload.report);
         setLoadError(null);
+
+        if (payload.warning) {
+          pushNotice("warning", "Report refreshed with warnings", payload.warning);
+        } else {
+          pushNotice("success", "Report refreshed", `Updated ${formatSelectedDate(selectedDate)} from live sources.`);
+        }
+      } else {
+        const message =
+          payload && typeof payload === "object" && "warning" in payload && typeof payload.warning === "string"
+            ? payload.warning
+            : `Refresh request failed with ${response.status} ${response.statusText}`;
+
+        setLoadError(message);
+        pushNotice("warning", "Refresh did not persist", message);
       }
-    } catch {
-      setLoadError("Refresh failed. Showing the last known report.");
+    } catch (error) {
+      const message = normalizeErrorMessage(error, "Refresh failed. Showing the last known report.");
+      setLoadError(message);
+      pushNotice("error", "Refresh failed", message);
     } finally {
       setRefreshing(false);
     }
@@ -707,6 +814,38 @@ export default function Home() {
             {loadingReport ? "Loading report..." : `${formatSelectedDate(selectedDate)} · updated ${minutesSinceRefresh}m ago`}
           </div>
         </div>
+      </div>
+
+      <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-[min(92vw,360px)] flex-col gap-2">
+        {notices.map((notice) => {
+          const toneStyles =
+            notice.tone === "success"
+              ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+              : notice.tone === "warning"
+                ? "border-amber-400/30 bg-amber-400/10 text-amber-50"
+                : notice.tone === "error"
+                  ? "border-rose-400/30 bg-rose-400/10 text-rose-50"
+                  : "border-cyan-400/30 bg-cyan-400/10 text-cyan-50";
+
+          return (
+            <article key={notice.id} className={`pointer-events-auto border px-4 py-3 shadow-2xl shadow-black/30 ${toneStyles}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.24em]">{notice.title}</div>
+                  <div className="mt-1 text-sm text-current/90">{notice.message}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => clearNotice(notice.id)}
+                  className="text-xs uppercase tracking-[0.24em] text-current/60 transition hover:text-current"
+                  aria-label={`Dismiss ${notice.title}`}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </article>
+          );
+        })}
       </div>
 
       <main className="relative mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 pb-10 sm:px-6 lg:px-8">
