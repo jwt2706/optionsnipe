@@ -24,62 +24,74 @@ async function resolveRequestedDate(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const database = await getDatabase();
   const now = new Date();
   const date = await resolveRequestedDate(request);
-  const locks = database.collection("refreshLocks");
-  const currentLock = await locks.findOne({ date }, { projection: { _id: 0 } });
-
-  if (currentLock?.lockedUntil && new Date(currentLock.lockedUntil) > now) {
-    const retryAfterSeconds = Math.max(
-      1,
-      Math.ceil((new Date(currentLock.lockedUntil).getTime() - now.getTime()) / 1000),
-    );
-
-    return NextResponse.json(
-      {
-        error: "Refresh recently triggered",
-        retryAfterSeconds,
-      },
-      {
-        status: 429,
-        headers: {
-          "Retry-After": String(retryAfterSeconds),
-        },
-      },
-    );
-  }
 
   const refreshedAt = now.toISOString();
   const lockedUntil = new Date(now.getTime() + refreshCooldownMinutes * 60 * 1000).toISOString();
   const report = await buildLiveDailyReport(new Date(`${date}T12:00:00Z`));
 
-  await Promise.all([
-    database.collection("dailyReports").updateOne(
-      { date },
+  try {
+    const database = await getDatabase();
+    const locks = database.collection("refreshLocks");
+    const currentLock = await locks.findOne({ date }, { projection: { _id: 0 } });
+
+    if (currentLock?.lockedUntil && new Date(currentLock.lockedUntil) > now) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((new Date(currentLock.lockedUntil).getTime() - now.getTime()) / 1000),
+      );
+
+      return NextResponse.json(
+        {
+          error: "Refresh recently triggered",
+          retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(retryAfterSeconds),
+          },
+        },
+      );
+    }
+
+    await Promise.all([
+      database.collection("dailyReports").updateOne(
+        { date },
+        {
+          $set: report,
+          $setOnInsert: {
+            date,
+          },
+        },
+        { upsert: true },
+      ),
+      locks.updateOne(
+        { date },
+        {
+          $set: {
+            date,
+            lockedUntil,
+            updatedAt: refreshedAt,
+          },
+          $setOnInsert: {
+            createdAt: refreshedAt,
+          },
+        },
+        { upsert: true },
+      ),
+    ]);
+  } catch {
+    return NextResponse.json(
       {
-        $set: report,
-        $setOnInsert: {
-          date,
-        },
+        report,
+        lockedUntil,
+        warning: "Database unavailable; report was not persisted.",
       },
-      { upsert: true },
-    ),
-    locks.updateOne(
-      { date },
-      {
-        $set: {
-          date,
-          lockedUntil,
-          updatedAt: refreshedAt,
-        },
-        $setOnInsert: {
-          createdAt: refreshedAt,
-        },
-      },
-      { upsert: true },
-    ),
-  ]);
+      { status: 200 },
+    );
+  }
 
   return NextResponse.json(
     {

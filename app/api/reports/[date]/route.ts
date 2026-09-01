@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { createSeedDailyReport } from "@/lib/market-report";
 import { getDatabase } from "@/lib/mongodb";
 
 export const runtime = "nodejs";
@@ -13,12 +14,16 @@ type RouteContext = {
 
 export async function GET(_request: Request, context: RouteContext) {
   const { date } = await context.params;
-  const database = await getDatabase();
-  const report = await database.collection("dailyReports").findOne({ date }, { projection: { _id: 0 } });
+  try {
+    const database = await getDatabase();
+    const report = await database.collection("dailyReports").findOne({ date }, { projection: { _id: 0 } });
 
-  if (!report) {
-    return NextResponse.json({ error: "Report not found" }, { status: 404 });
+    if (!report) {
+      return NextResponse.json({ error: "Report not found" }, { status: 404 });
+    }
+
+    return NextResponse.json(report);
+  } catch {
+    return NextResponse.json(createSeedDailyReport(new Date(`${date}T12:00:00Z`)), { status: 200 });
   }
-
-  return NextResponse.json(report);
 }

@@ -18,16 +18,21 @@ function parseLimit(value: string | null) {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const limit = parseLimit(searchParams.get("limit"));
-  const database = await getDatabase();
 
-  const reports = await database
-    .collection("dailyReports")
-    .find({}, { projection: { _id: 0 } })
-    .sort({ refreshedAt: -1, date: -1 })
-    .limit(limit)
-    .toArray();
+  try {
+    const database = await getDatabase();
 
-  const history: DailyReportHistoryEntry[] = reports.map((report) => buildHistoryEntry(report as unknown as DailyReport));
+    const reports = await database
+      .collection("dailyReports")
+      .find({}, { projection: { _id: 0 } })
+      .sort({ refreshedAt: -1, date: -1 })
+      .limit(limit)
+      .toArray();
 
-  return NextResponse.json({ history });
+    const history: DailyReportHistoryEntry[] = reports.map((report) => buildHistoryEntry(report as unknown as DailyReport));
+
+    return NextResponse.json({ history });
+  } catch {
+    return NextResponse.json({ history: [] as DailyReportHistoryEntry[] });
+  }
 }

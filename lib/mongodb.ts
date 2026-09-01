@@ -1,4 +1,4 @@
-import { MongoClient, type Db } from "mongodb";
+import { MongoClient, type Db, type MongoClientOptions } from "mongodb";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -10,6 +10,12 @@ declare global {
 let clientPromise: Promise<MongoClient> | undefined;
 
 let indexesPromise: Promise<void> | null = null;
+
+const clientOptions: MongoClientOptions = {
+  tls: true,
+  connectTimeoutMS: 10_000,
+  serverSelectionTimeoutMS: 10_000,
+};
 
 async function ensureIndexes(db: Db) {
   if (!indexesPromise) {
@@ -31,7 +37,17 @@ export async function getDatabase() {
     }
 
     if (!clientPromise) {
-      clientPromise = globalThis.__mongoClientPromise ?? new MongoClient(uri).connect();
+      const connectionPromise = globalThis.__mongoClientPromise ?? new MongoClient(uri, clientOptions).connect();
+
+      clientPromise = connectionPromise.catch((error) => {
+        clientPromise = undefined;
+
+        if (process.env.NODE_ENV !== "production") {
+          globalThis.__mongoClientPromise = undefined;
+        }
+
+        throw error;
+      });
 
       if (process.env.NODE_ENV !== "production") {
         globalThis.__mongoClientPromise = clientPromise;
