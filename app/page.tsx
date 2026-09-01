@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+import { createSeedDailyReport, type DailyReport } from "@/lib/market-report";
 
 type Tab = "Calendar" | "Earnings" | "Movers" | "Options";
 type MarketCapFilter = "all" | "10b" | "100b";
@@ -285,46 +287,129 @@ function SparkBar({ value }: { value: number }) {
   );
 }
 
+function normalizeTab(value: string | null): Tab {
+  return value === "Earnings" || value === "Movers" || value === "Options" ? value : "Calendar";
+}
+
 export default function Home() {
+  const [report, setReport] = useState<DailyReport>(() => createSeedDailyReport());
+  const [loadingReport, setLoadingReport] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("Calendar");
   const [marketCapFilter, setMarketCapFilter] = useState<MarketCapFilter>("10b");
   const [refreshing, setRefreshing] = useState(false);
-  const [lastRefresh, setLastRefresh] = useState(() => Date.now() - 6 * 60 * 1000);
 
-  const minutesSinceRefresh = Math.max(0, Math.floor((Date.now() - lastRefresh) / 60000));
+  useEffect(() => {
+    setActiveTab(normalizeTab(window.location.hash.replace(/^#/, "")));
+
+    const handleHashChange = () => {
+      setActiveTab(normalizeTab(window.location.hash.replace(/^#/, "")));
+    };
+
+    window.addEventListener("hashchange", handleHashChange);
+
+    return () => {
+      window.removeEventListener("hashchange", handleHashChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadReport = async () => {
+      try {
+        const response = await fetch("/api/reports/today", { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error("Failed to load report");
+        }
+
+        const payload = (await response.json()) as DailyReport;
+        if (!cancelled) {
+          setReport(payload);
+          setLoadError(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setLoadError("Live market data is unavailable right now; showing cached fallback data.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingReport(false);
+        }
+      }
+    };
+
+    void loadReport();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const lastRefresh = Date.parse(report.lastFetchedAt);
+  const minutesSinceRefresh = Number.isFinite(lastRefresh)
+    ? Math.max(0, Math.floor((Date.now() - lastRefresh) / 60000))
+    : 0;
   const refreshLocked = minutesSinceRefresh < 3 || refreshing;
 
+  const statusTone =
+    report.status === "fresh"
+      ? "bg-emerald-400"
+      : report.status === "partial"
+        ? "bg-amber-400"
+        : "bg-rose-400";
+  const statusLabel =
+    report.status === "fresh" ? "Live data fresh" : report.status === "partial" ? "Partial data" : "Data error";
+
   const filteredEarnings = useMemo(
-    () => earningsRows.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
-    [marketCapFilter],
+    () => report.earningsRows.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
+    [marketCapFilter, report.earningsRows],
   );
 
   const filteredGainers = useMemo(
-    () => gainers.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
-    [marketCapFilter],
+    () => report.gainers.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
+    [marketCapFilter, report.gainers],
   );
 
   const filteredLosers = useMemo(
-    () => losers.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
-    [marketCapFilter],
+    () => report.losers.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
+    [marketCapFilter, report.losers],
   );
 
   const filteredOptions = useMemo(
-    () => optionsRows.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
-    [marketCapFilter],
+    () => report.optionsRows.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
+    [marketCapFilter, report.optionsRows],
   );
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     if (refreshLocked) {
       return;
     }
 
     setRefreshing(true);
-    setLastRefresh(Date.now());
 
-    window.setTimeout(() => {
+    try {
+      const response = await fetch("/api/refresh", {
+        method: "POST",
+      });
+
+      const payload = (await response.json()) as { report?: DailyReport };
+
+      if (response.ok && payload.report) {
+        setReport(payload.report);
+        setLoadError(null);
+      }
+    } catch {
+      setLoadError("Refresh failed. Showing the last known report.");
+    } finally {
       setRefreshing(false);
-    }, 1200);
+    }
+  };
+
+  const setTab = (tab: Tab) => {
+    setActiveTab(tab);
+    window.history.replaceState(null, "", `#${tab}`);
   };
 
   return (
@@ -349,8 +434,8 @@ export default function Home() {
                 Mon, Aug 31
               </div>
               <div className="flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3 py-2">
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                <span>Live data fresh</span>
+                <span className={`h-2 w-2 rounded-full ${statusTone}`} />
+                <span>{statusLabel}</span>
               </div>
               <div className="font-mono text-zinc-500">Updated {minutesSinceRefresh}m ago</div>
             </div>
@@ -401,7 +486,7 @@ export default function Home() {
         <section className="border border-white/8 bg-white/[0.02] px-4 py-4 backdrop-blur-sm sm:px-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap gap-2">
-              {heroFacts.map((fact) => (
+              {report.heroFacts.map((fact) => (
                 <div
                   key={fact}
                   className="border border-white/8 bg-black/30 px-3 py-2 text-sm text-zinc-200"
@@ -439,12 +524,12 @@ export default function Home() {
           </div>
 
           <div className="mt-4 border-t border-white/8 pt-4 text-xs text-zinc-500">
-            Options feed is healthy. No major macro event after 2:00 PM ET.
+            {loadError ?? "Options feed is healthy. No major macro event after 2:00 PM ET."}
           </div>
         </section>
 
         <section className="sticky top-[92px] z-30 border-b border-white/8 bg-[#050608]/95 backdrop-blur-xl">
-          <div className="flex gap-6 overflow-x-auto px-1 py-2 text-sm">
+          <div className="flex gap-6 overflow-x-auto px-1 py-2 text-sm" role="tablist" aria-label="Dashboard sections">
             {tabs.map((tab) => {
               const active = activeTab === tab;
 
@@ -452,7 +537,10 @@ export default function Home() {
                 <button
                   key={tab}
                   type="button"
-                  onClick={() => setActiveTab(tab)}
+                  onClick={() => setTab(tab)}
+                  role="tab"
+                  aria-selected={active}
+                  aria-controls={`panel-${tab.toLowerCase()}`}
                   className={`relative whitespace-nowrap pb-2 transition ${
                     active ? "text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
                   }`}
@@ -471,14 +559,14 @@ export default function Home() {
 
         <section className="border border-white/8 bg-white/[0.02] px-4 py-5 sm:px-5">
           {activeTab === "Calendar" ? (
-            <div className="space-y-5">
+            <div id="panel-calendar" role="tabpanel" className="space-y-5 outline-none">
               <SectionHeading
                 title="Calendar"
                 subtitle="Chronological timeline, grouped by session and trimmed for fast scanning."
               />
 
               <div className="space-y-3">
-                {calendarEvents.map((event) => (
+                {report.calendarEvents.map((event) => (
                   <article
                     key={`${event.time}-${event.name}`}
                     className="grid gap-3 border-b border-white/6 py-4 last:border-b-0 md:grid-cols-[96px_minmax(0,1fr)_240px] md:items-center"
@@ -523,7 +611,7 @@ export default function Home() {
           ) : null}
 
           {activeTab === "Earnings" ? (
-            <div className="space-y-5">
+            <div id="panel-earnings" role="tabpanel" className="space-y-5 outline-none">
               <SectionHeading
                 title="Earnings"
                 subtitle="Market cap sorted, with beat or miss deltas emphasized over raw numbers."
@@ -635,7 +723,7 @@ export default function Home() {
           ) : null}
 
           {activeTab === "Movers" ? (
-            <div className="space-y-5">
+            <div id="panel-movers" role="tabpanel" className="space-y-5 outline-none">
               <SectionHeading
                 title="Movers"
                 subtitle="Two-sided heat map with rank, company context, and compact volume bars."
@@ -698,7 +786,7 @@ export default function Home() {
           ) : null}
 
           {activeTab === "Options" ? (
-            <div className="space-y-5">
+            <div id="panel-options" role="tabpanel" className="space-y-5 outline-none">
               <SectionHeading
                 title="Options"
                 subtitle="Unusual volume, IV rank, and put/call ratio at a glance."
