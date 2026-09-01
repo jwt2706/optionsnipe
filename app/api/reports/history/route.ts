@@ -31,8 +31,8 @@ export async function GET(request: Request) {
 
     const history: DailyReportHistoryEntry[] = reports.map((report) =>
       buildHistoryEntry({
-        ...(report as DailyReport),
-        source: (report as DailyReport).source ?? "mixed",
+        ...(report as unknown as DailyReport),
+        source: (report as unknown as DailyReport).source ?? "mixed",
       }),
     );
 
