@@ -12,7 +12,7 @@ function parseLimit(value: string | null) {
     return 5;
   }
 
-  return Math.min(parsed, 180);
+  return Math.min(parsed, 20);
 }
 
 export async function GET(request: Request) {
@@ -30,17 +30,14 @@ export async function GET(request: Request) {
       .toArray();
 
     const history: DailyReportHistoryEntry[] = reports.map((report) =>
-      buildHistoryEntry({
-        ...(report as unknown as DailyReport),
-        source: (report as unknown as DailyReport).source ?? "mixed",
-      }),
+      buildHistoryEntry(report as unknown as DailyReport),
     );
 
     return NextResponse.json({ history });
   } catch {
     return NextResponse.json({
       history: [] as DailyReportHistoryEntry[],
-      warning: "History unavailable while the database connection is down.",
+      warning: "Database unavailable; report history could not be loaded.",
     });
   }
 }

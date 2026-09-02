@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  createSeedDailyReport,
   todayKey,
   type DailyReport,
   type DailyReportHistoryEntry,
@@ -74,9 +73,7 @@ function Delta({ value }: { value: number }) {
 function SectionHeading({ title }: { title: string }) {
   return (
     <div className="flex flex-col gap-1">
-      <h2 className="text-sm font-medium uppercase tracking-[0.28em] text-zinc-400">
-        {title}
-      </h2>
+      <h2 className="text-sm font-medium uppercase tracking-[0.28em] text-zinc-400">{title}</h2>
     </div>
   );
 }
@@ -84,10 +81,15 @@ function SectionHeading({ title }: { title: string }) {
 function SparkBar({ value }: { value: number }) {
   return (
     <div className="h-2 w-20 overflow-hidden border border-white/10 bg-white/[0.03]">
-      <div
-        className="h-full bg-cyan-400/80"
-        style={{ width: `${Math.max(8, Math.min(100, value))}%` }}
-      />
+      <div className="h-full bg-cyan-400/80" style={{ width: `${Math.max(8, Math.min(100, value))}%` }} />
+    </div>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="border border-dashed border-white/10 bg-white/[0.015] px-4 py-10 text-center text-sm text-zinc-500">
+      {message}
     </div>
   );
 }
@@ -114,10 +116,10 @@ function describeReportSource(source: ReportSource | undefined) {
   }
 
   if (source === "mixed") {
-    return "Live + fallback";
+    return "Live + partial";
   }
 
-  return "Seed data";
+  return "No data";
 }
 
 function formatSelectedDate(value: string) {
@@ -176,7 +178,7 @@ function buildMonthDays(monthDate: Date) {
 }
 
 export default function Home() {
-  const [report, setReport] = useState<DailyReport>(() => createSeedDailyReport());
+  const [report, setReport] = useState<DailyReport | null>(null);
   const [reportDates, setReportDates] = useState<string[]>([]);
   const [loadingReport, setLoadingReport] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -260,7 +262,10 @@ export default function Home() {
         ]);
 
         if (historyResponse.ok) {
-          const historyPayload = (await historyResponse.json()) as { history?: DailyReportHistoryEntry[]; warning?: string };
+          const historyPayload = (await historyResponse.json()) as {
+            history?: DailyReportHistoryEntry[];
+            warning?: string;
+          };
           setReportDates((historyPayload.history ?? []).map((entry) => entry.date));
 
           if (historyPayload.warning && !cancelled) {
@@ -273,26 +278,23 @@ export default function Home() {
         }
 
         if (reportResponse.ok) {
-          const payload = (await reportResponse.json()) as DailyReport & { warning?: string };
-          const payloadSource = payload.source ?? (payload.status === "failed" ? "seed" : "mixed");
+          const payload = (await reportResponse.json()) as DailyReport;
 
           if (!cancelled) {
             setReport(payload);
             setLoadError(null);
 
-            if (payload.warning) {
-              pushNotice("warning", "Fallback report loaded", payload.warning);
-            } else if (payloadSource === "seed") {
+            if (payload.source === "empty") {
               pushNotice(
                 "warning",
-                "Seed data loaded",
-                "MongoDB or the live sources were unavailable, so this report is showing fallback data.",
+                "No data available",
+                "Live market sources returned nothing for this date and no cached copy exists.",
               );
-            } else if (payloadSource === "mixed") {
+            } else if (payload.source === "mixed") {
               pushNotice(
                 "warning",
                 "Partial market data",
-                "Some live feeds returned data and some fell back to seed values. Check the source badge for the current mix.",
+                "Some live feeds were unavailable, so parts of this report are empty.",
               );
             }
           }
@@ -300,14 +302,16 @@ export default function Home() {
           return;
         }
 
-        if (!reportResponse.ok && reportResponse.status !== 404) {
+        if (reportResponse.status !== 404) {
           const message = buildStatusMessage(reportResponse, "Unable to load report");
           setLoadError(message);
           pushNotice("warning", "Report fetch failed", message);
-        }
-
-        if (reportResponse.status === 404 && !cancelled) {
-          pushNotice("info", "No stored report", `${formatSelectedDate(selectedDate)} was not in MongoDB. Generating it now.`);
+        } else if (!cancelled) {
+          pushNotice(
+            "info",
+            "No stored report",
+            `${formatSelectedDate(selectedDate)} isn't saved yet. Fetching live data.`,
+          );
         }
 
         const refreshResponse = await fetch("/api/refresh", {
@@ -348,17 +352,17 @@ export default function Home() {
 
           if (payload.warning) {
             pushNotice("warning", "Report saved without persistence", payload.warning);
-          } else if (payload.report.source === "seed") {
-            pushNotice("warning", "Seed data loaded", "The refresh completed, but the report had to fall back to seed data.");
+          } else if (payload.report.source === "empty") {
+            pushNotice("warning", "No live data available", "The refresh completed, but no live sources returned data.");
           } else if (payload.report.source === "mixed") {
-            pushNotice("warning", "Partial live data", "The refresh succeeded, but some sections still used fallback values.");
+            pushNotice("warning", "Partial live data", "The refresh succeeded, but some sections came back empty.");
           } else {
             pushNotice("success", "Report refreshed", `Loaded ${formatSelectedDate(selectedDate)} successfully.`);
           }
         }
       } catch (error) {
         if (!cancelled) {
-          const message = normalizeErrorMessage(error, "Live market data is unavailable right now; showing cached fallback data.");
+          const message = normalizeErrorMessage(error, "Live market data is unavailable right now.");
           setLoadError(message);
           pushNotice("error", "Report load failed", message);
         }
@@ -376,52 +380,59 @@ export default function Home() {
     };
   }, [selectedDate]);
 
-  const lastRefresh = Date.parse(report.lastFetchedAt);
+  const lastRefresh = report ? Date.parse(report.lastFetchedAt) : NaN;
   const minutesSinceRefresh = Number.isFinite(lastRefresh)
     ? Math.max(0, Math.floor((Date.now() - lastRefresh) / 60000))
     : 0;
-  const refreshLocked = minutesSinceRefresh < 3 || refreshing;
+  const refreshLocked = !report || minutesSinceRefresh < 3 || refreshing;
 
-  const statusTone =
-    report.status === "fresh"
+  const statusTone = !report
+    ? "bg-zinc-600"
+    : report.status === "fresh"
       ? "bg-emerald-400"
       : report.status === "partial"
         ? "bg-amber-400"
         : "bg-rose-400";
-  const statusLabel =
-    report.status === "fresh" ? "Live data fresh" : report.status === "partial" ? "Partial data" : "Data error";
-  const sourceKind = report.source ?? (report.status === "failed" ? "seed" : "mixed");
-  const sourceLabel = describeReportSource(sourceKind);
+
+  const statusLabel = !report
+    ? "Loading"
+    : report.status === "fresh"
+      ? "Live data fresh"
+      : report.status === "partial"
+        ? "Partial data"
+        : "No data";
+
+  const sourceLabel = describeReportSource(report?.source);
   const sourceTone =
-    sourceKind === "live"
+    report?.source === "live"
       ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
-      : sourceKind === "mixed"
+      : report?.source === "mixed"
         ? "border-amber-400/30 bg-amber-400/10 text-amber-100"
         : "border-rose-400/30 bg-rose-400/10 text-rose-100";
 
   const filteredEarnings = useMemo(
-    () => report.earningsRows.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
-    [marketCapFilter, report.earningsRows],
+    () => (report?.earningsRows ?? []).filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
+    [marketCapFilter, report],
   );
 
   const filteredGainers = useMemo(
-    () => report.gainers.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
-    [marketCapFilter, report.gainers],
+    () => (report?.gainers ?? []).filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
+    [marketCapFilter, report],
   );
 
   const filteredLosers = useMemo(
-    () => report.losers.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
-    [marketCapFilter, report.losers],
+    () => (report?.losers ?? []).filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
+    [marketCapFilter, report],
   );
 
   const filteredOptions = useMemo(
-    () => report.optionsRows.filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
-    [marketCapFilter, report.optionsRows],
+    () => (report?.optionsRows ?? []).filter((row) => matchesMarketCap(row.marketCap, marketCapFilter)),
+    [marketCapFilter, report],
   );
 
   const handleRefresh = async () => {
     if (refreshLocked) {
-      pushNotice("info", "Refresh paused", "This report was refreshed recently. Try again in a moment.");
+      pushNotice("info", "Refresh paused", "This report was refreshed recently, or is still loading. Try again in a moment.");
       return;
     }
 
@@ -447,6 +458,8 @@ export default function Home() {
 
         if (payload.warning) {
           pushNotice("warning", "Report refreshed with warnings", payload.warning);
+        } else if (payload.report.source === "empty") {
+          pushNotice("warning", "No live data available", "The refresh ran, but no live sources returned data.");
         } else {
           pushNotice("success", "Report refreshed", `Updated ${formatSelectedDate(selectedDate)} from live sources.`);
         }
@@ -603,7 +616,7 @@ export default function Home() {
                 onClick={handleRefresh}
                 disabled={refreshLocked}
                 className="inline-flex items-center gap-2 border border-cyan-400/40 px-3 py-2 text-xs font-medium text-cyan-300 transition hover:border-cyan-300 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-zinc-500"
-                title={refreshLocked ? "Refreshed recently" : "Refresh market data"}
+                title={refreshLocked ? "Refreshed recently, or still loading" : "Refresh market data"}
               >
                 <svg
                   className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`}
@@ -627,7 +640,6 @@ export default function Home() {
                 </svg>
                 <span>Refresh</span>
               </button>
-
             </div>
           </div>
         </div>
@@ -638,12 +650,18 @@ export default function Home() {
           <div className="flex items-center gap-2">
             <span className={`h-2 w-2 rounded-full ${statusTone}`} />
             <span>{loadError ?? statusLabel}</span>
-            <span className={`border px-2 py-0.5 text-[10px] uppercase tracking-[0.24em] ${sourceTone}`}>
-              {sourceLabel}
-            </span>
+            {report ? (
+              <span className={`border px-2 py-0.5 text-[10px] uppercase tracking-[0.24em] ${sourceTone}`}>
+                {sourceLabel}
+              </span>
+            ) : null}
           </div>
           <div className="font-mono text-zinc-500">
-            {loadingReport ? "Loading report..." : `${formatSelectedDate(selectedDate)} · updated ${minutesSinceRefresh}m ago`}
+            {loadingReport
+              ? "Loading report..."
+              : report
+                ? `${formatSelectedDate(selectedDate)} · updated ${minutesSinceRefresh}m ago`
+                : "No report loaded"}
           </div>
         </div>
       </div>
@@ -681,369 +699,420 @@ export default function Home() {
       </div>
 
       <main className="relative mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 pb-10 sm:px-6 lg:px-8">
-        <section className="border border-white/8 bg-white/[0.02] px-4 py-4 backdrop-blur-sm sm:px-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-wrap gap-2">
-              {report.heroFacts.map((fact) => (
-                <div
-                  key={fact}
-                  className="border border-white/8 bg-black/30 px-3 py-2 text-sm text-zinc-200"
-                >
-                  {fact}
+        {!report ? (
+          <section className="border border-white/8 bg-white/[0.02] px-4 py-16 text-center sm:px-5">
+            {loadingReport ? (
+              <div className="space-y-3">
+                <div className="mx-auto h-2 w-40 animate-pulse bg-white/10" />
+                <div className="text-sm text-zinc-500">Loading market data…</div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="text-sm text-zinc-300">No report loaded for {formatSelectedDate(selectedDate)}.</div>
+                {loadError ? <div className="text-xs text-rose-400">{loadError}</div> : null}
+              </div>
+            )}
+          </section>
+        ) : (
+          <>
+            <section className="border border-white/8 bg-white/[0.02] px-4 py-4 backdrop-blur-sm sm:px-5">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex flex-wrap gap-2">
+                  {report.heroFacts.length ? (
+                    report.heroFacts.map((fact) => (
+                      <div key={fact} className="border border-white/8 bg-black/30 px-3 py-2 text-sm text-zinc-200">
+                        {fact}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="border border-white/8 bg-black/30 px-3 py-2 text-sm text-zinc-500">
+                      No highlights available for this date.
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
 
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-              <span className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Market cap filter
-              </span>
-              <div className="flex overflow-hidden border border-white/8">
-                {marketCapOptions.map((option) => {
-                  const active = marketCapFilter === option.value;
+                <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                  <span className="text-xs uppercase tracking-[0.24em] text-zinc-500">
+                    Market cap filter
+                  </span>
+                  <div className="flex overflow-hidden border border-white/8">
+                    {marketCapOptions.map((option) => {
+                      const active = marketCapFilter === option.value;
+
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setMarketCapFilter(option.value)}
+                          className={`px-3 py-2 text-xs font-medium transition ${
+                            active
+                              ? "bg-cyan-400/15 text-cyan-300"
+                              : "bg-transparent text-zinc-500 hover:bg-white/[0.03] hover:text-zinc-200"
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 border-t border-white/8 pt-4 text-xs text-zinc-500">
+                Market breadth, earnings, and macro events update from live sources when available.
+              </div>
+            </section>
+
+            <section className="sticky top-[92px] z-30 border-b border-white/8 bg-[#050608]/95 backdrop-blur-xl">
+              <div className="flex gap-6 overflow-x-auto px-1 py-2 text-sm" role="tablist" aria-label="Dashboard sections">
+                {tabs.map((tab) => {
+                  const active = activeTab === tab;
 
                   return (
                     <button
-                      key={option.value}
+                      key={tab}
                       type="button"
-                      onClick={() => setMarketCapFilter(option.value)}
-                      className={`px-3 py-2 text-xs font-medium transition ${
-                        active
-                          ? "bg-cyan-400/15 text-cyan-300"
-                          : "bg-transparent text-zinc-500 hover:bg-white/[0.03] hover:text-zinc-200"
+                      onClick={() => setTab(tab)}
+                      role="tab"
+                      aria-selected={active}
+                      aria-controls={`panel-${tab.toLowerCase()}`}
+                      className={`relative whitespace-nowrap pb-2 transition ${
+                        active ? "text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
                       }`}
                     >
-                      {option.label}
+                      <span>{tab}</span>
+                      <span
+                        className={`absolute inset-x-0 bottom-0 h-px transition ${
+                          active ? "bg-cyan-400" : "bg-transparent"
+                        }`}
+                      />
                     </button>
                   );
                 })}
               </div>
-            </div>
-          </div>
+            </section>
 
-          <div className="mt-4 border-t border-white/8 pt-4 text-xs text-zinc-500">
-            Market breadth, earnings, and macro events update from live sources when available.
-          </div>
-        </section>
+            <section className="border border-white/8 bg-white/[0.02] px-4 py-5 sm:px-5">
+              {activeTab === "Calendar" ? (
+                <div id="panel-calendar" role="tabpanel" className="space-y-5 outline-none">
+                  <SectionHeading title="Calendar" />
 
-        <section className="sticky top-[92px] z-30 border-b border-white/8 bg-[#050608]/95 backdrop-blur-xl">
-          <div className="flex gap-6 overflow-x-auto px-1 py-2 text-sm" role="tablist" aria-label="Dashboard sections">
-            {tabs.map((tab) => {
-              const active = activeTab === tab;
+                  {report.calendarEvents.length ? (
+                    <div className="space-y-3">
+                      {report.calendarEvents.map((event) => (
+                        <article
+                          key={`${event.time}-${event.name}`}
+                          className="grid gap-3 border-b border-white/6 py-4 last:border-b-0 md:grid-cols-[96px_minmax(0,1fr)_240px] md:items-center"
+                        >
+                          <div className="font-mono text-lg text-zinc-100">{event.time}</div>
 
-              return (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setTab(tab)}
-                  role="tab"
-                  aria-selected={active}
-                  aria-controls={`panel-${tab.toLowerCase()}`}
-                  className={`relative whitespace-nowrap pb-2 transition ${
-                    active ? "text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
-                  }`}
-                >
-                  <span>{tab}</span>
-                  <span
-                    className={`absolute inset-x-0 bottom-0 h-px transition ${
-                      active ? "bg-cyan-400" : "bg-transparent"
-                    }`}
-                  />
-                </button>
-              );
-            })}
-          </div>
-        </section>
+                          <div className="flex min-w-0 flex-col gap-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-base font-medium text-zinc-100">{event.name}</h3>
+                              <span className="border border-white/8 px-2 py-0.5 text-[11px] uppercase tracking-[0.22em] text-zinc-400">
+                                {event.category}
+                              </span>
+                            </div>
+                            <div className="text-sm text-zinc-500">{event.session}</div>
+                          </div>
 
-        <section className="border border-white/8 bg-white/[0.02] px-4 py-5 sm:px-5">
-          {activeTab === "Calendar" ? (
-            <div id="panel-calendar" role="tabpanel" className="space-y-5 outline-none">
-              <SectionHeading title="Calendar" />
+                          <div className="grid grid-cols-3 gap-2 text-right text-xs text-zinc-400 md:text-sm">
+                            <div>
+                              <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Consensus</div>
+                              <div className="font-mono text-zinc-200">{event.consensus}</div>
+                            </div>
+                            <div>
+                              <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Previous</div>
+                              <div className="font-mono text-zinc-200">{event.previous}</div>
+                            </div>
+                            <div>
+                              <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Actual</div>
+                              <div className="font-mono text-zinc-200">
+                                {event.actual ?? "—"}
+                                {event.surprise ? (
+                                  <span className="ml-2 align-middle">
+                                    <Delta value={Number(event.surprise)} />
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState message="No calendar events for this date." />
+                  )}
+                </div>
+              ) : null}
 
-              <div className="space-y-3">
-                {report.calendarEvents.map((event) => (
-                  <article
-                    key={`${event.time}-${event.name}`}
-                    className="grid gap-3 border-b border-white/6 py-4 last:border-b-0 md:grid-cols-[96px_minmax(0,1fr)_240px] md:items-center"
-                  >
-                    <div className="font-mono text-lg text-zinc-100">{event.time}</div>
+              {activeTab === "Earnings" ? (
+                <div id="panel-earnings" role="tabpanel" className="space-y-5 outline-none">
+                  <SectionHeading title="Earnings" />
 
-                    <div className="flex min-w-0 flex-col gap-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-base font-medium text-zinc-100">{event.name}</h3>
-                        <span className="border border-white/8 px-2 py-0.5 text-[11px] uppercase tracking-[0.22em] text-zinc-400">
-                          {event.category}
-                        </span>
+                  {filteredEarnings.length ? (
+                    <>
+                      <div className="hidden overflow-hidden border border-white/8 md:block">
+                        <table className="w-full border-collapse text-left text-sm">
+                          <thead className="sticky z-10 bg-[#0a0c10] text-xs uppercase tracking-[0.2em] text-zinc-500">
+                            <tr className="border-b border-white/8">
+                              <th className="px-4 py-3">Ticker</th>
+                              <th className="px-4 py-3">Company</th>
+                              <th className="px-4 py-3">Market Cap</th>
+                              <th className="px-4 py-3">Report Time</th>
+                              <th className="px-4 py-3">EPS Est vs Actual</th>
+                              <th className="px-4 py-3">Rev Est vs Actual</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredEarnings.map((row) => {
+                              const epsDelta =
+                                parseFloat(row.epsActual.replace("$", "")) - parseFloat(row.epsEstimate.replace("$", ""));
+                              const revDelta =
+                                parseFloat(row.revenueActual.replace("$", "").replace("B", "")) -
+                                parseFloat(row.revenueEstimate.replace("$", "").replace("B", ""));
+
+                              return (
+                                <tr key={row.ticker} className="border-b border-white/6 last:border-b-0">
+                                  <td className="px-4 py-4 font-mono text-base text-zinc-100">{row.ticker}</td>
+                                  <td className="px-4 py-4 text-zinc-200">{row.company}</td>
+                                  <td className="px-4 py-4 font-mono text-zinc-300">{formatMarketCap(row.marketCap)}</td>
+                                  <td className="px-4 py-4">
+                                    <span className="border border-white/8 px-2 py-1 text-xs uppercase tracking-[0.22em] text-zinc-300">
+                                      {row.reportTime}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-4 font-mono text-zinc-300">
+                                    <span className="text-zinc-500">{row.epsEstimate}</span>
+                                    <span className="mx-2 text-zinc-600">vs</span>
+                                    <span className={epsDelta >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                                      {row.epsActual}
+                                    </span>
+                                    <span className={`ml-2 ${epsDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                      {formatChange(epsDelta)}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-4 font-mono text-zinc-300">
+                                    <span className="text-zinc-500">{row.revenueEstimate}</span>
+                                    <span className="mx-2 text-zinc-600">vs</span>
+                                    <span className={revDelta >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                                      {row.revenueActual}
+                                    </span>
+                                    <span className={`ml-2 ${revDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                      {formatChange(revDelta)}B
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       </div>
-                      <div className="text-sm text-zinc-500">{event.session}</div>
+
+                      <div className="space-y-3 md:hidden">
+                        {filteredEarnings.map((row) => {
+                          const epsDelta =
+                            parseFloat(row.epsActual.replace("$", "")) - parseFloat(row.epsEstimate.replace("$", ""));
+                          const revDelta =
+                            parseFloat(row.revenueActual.replace("$", "").replace("B", "")) -
+                            parseFloat(row.revenueEstimate.replace("$", "").replace("B", ""));
+
+                          return (
+                            <article key={row.ticker} className="border border-white/8 bg-black/20 px-4 py-4">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="font-mono text-lg text-zinc-100">{row.ticker}</div>
+                                  <div className="text-sm text-zinc-400">{row.company}</div>
+                                </div>
+                                <span className="border border-white/8 px-2 py-1 text-xs uppercase tracking-[0.22em] text-zinc-300">
+                                  {row.reportTime}
+                                </span>
+                              </div>
+                              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                                <div>
+                                  <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Market cap</div>
+                                  <div className="font-mono text-zinc-200">{formatMarketCap(row.marketCap)}</div>
+                                </div>
+                                <div>
+                                  <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">EPS</div>
+                                  <div className={`font-mono ${epsDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                    {row.epsEstimate} vs {row.epsActual}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Revenue</div>
+                                  <div className={`font-mono ${revDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                    {row.revenueEstimate} vs {row.revenueActual}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Beat / miss</div>
+                                  <div className={`font-mono ${epsDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                    {formatChange(epsDelta)} EPS
+                                  </div>
+                                </div>
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </>
+                  ) : (
+                    <EmptyState message="No earnings scheduled that match this filter." />
+                  )}
+                </div>
+              ) : null}
+
+              {activeTab === "Movers" ? (
+                <div id="panel-movers" role="tabpanel" className="space-y-5 outline-none">
+                  <SectionHeading title="Movers" />
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="border border-white/8">
+                      <div className="border-b border-white/8 px-4 py-3 text-xs uppercase tracking-[0.22em] text-emerald-400">
+                        Gainers
+                      </div>
+                      {filteredGainers.length ? (
+                        <div className="divide-y divide-white/6">
+                          {filteredGainers.map((row, index) => (
+                            <article key={row.ticker} className="grid grid-cols-[32px_minmax(0,1fr)_72px] gap-3 px-4 py-4">
+                              <div className="font-mono text-sm text-zinc-500">{index + 1}</div>
+                              <div className="min-w-0">
+                                <div className="flex items-baseline gap-2">
+                                  <div className="font-mono text-base text-zinc-100">{row.ticker}</div>
+                                  <div className="truncate text-sm text-zinc-500">{row.company}</div>
+                                </div>
+                                <div className="mt-2 h-1.5 bg-white/[0.04]">
+                                  <div className="h-full bg-emerald-400/70" style={{ width: `${row.volume}%` }} />
+                                </div>
+                              </div>
+                              <div className="text-right font-mono">
+                                <div className="text-lg text-emerald-400">{formatChange(row.percentChange)}%</div>
+                                <div className="text-xs text-zinc-400">{formatDollarChange(row.dollarChange)}</div>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="px-4 py-8">
+                          <EmptyState message="No gainers match this filter." />
+                        </div>
+                      )}
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 text-right text-xs text-zinc-400 md:text-sm">
-                      <div>
-                        <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Consensus</div>
-                        <div className="font-mono text-zinc-200">{event.consensus}</div>
+                    <div className="border border-white/8">
+                      <div className="border-b border-white/8 px-4 py-3 text-xs uppercase tracking-[0.22em] text-rose-400">
+                        Losers
                       </div>
-                      <div>
-                        <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Previous</div>
-                        <div className="font-mono text-zinc-200">{event.previous}</div>
-                      </div>
-                      <div>
-                        <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Actual</div>
-                        <div className="font-mono text-zinc-200">
-                          {event.actual ?? "—"}
-                          {event.surprise ? (
-                            <span className="ml-2 align-middle">
-                              <Delta value={Number(event.surprise)} />
-                            </span>
-                          ) : null}
+                      {filteredLosers.length ? (
+                        <div className="divide-y divide-white/6">
+                          {filteredLosers.map((row, index) => (
+                            <article key={row.ticker} className="grid grid-cols-[32px_minmax(0,1fr)_72px] gap-3 px-4 py-4">
+                              <div className="font-mono text-sm text-zinc-500">{index + 1}</div>
+                              <div className="min-w-0">
+                                <div className="flex items-baseline gap-2">
+                                  <div className="font-mono text-base text-zinc-100">{row.ticker}</div>
+                                  <div className="truncate text-sm text-zinc-500">{row.company}</div>
+                                </div>
+                                <div className="mt-2 h-1.5 bg-white/[0.04]">
+                                  <div className="h-full bg-rose-400/70" style={{ width: `${row.volume}%` }} />
+                                </div>
+                              </div>
+                              <div className="text-right font-mono">
+                                <div className="text-lg text-rose-400">{formatChange(row.percentChange)}%</div>
+                                <div className="text-xs text-zinc-400">{formatDollarChange(row.dollarChange)}</div>
+                              </div>
+                            </article>
+                          ))}
                         </div>
-                      </div>
+                      ) : (
+                        <div className="px-4 py-8">
+                          <EmptyState message="No losers match this filter." />
+                        </div>
+                      )}
                     </div>
-                  </article>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {activeTab === "Earnings" ? (
-            <div id="panel-earnings" role="tabpanel" className="space-y-5 outline-none">
-              <SectionHeading title="Earnings" />
-
-              <div className="hidden overflow-hidden border border-white/8 md:block">
-                <table className="w-full border-collapse text-left text-sm">
-                  <thead className="sticky z-10 bg-[#0a0c10] text-xs uppercase tracking-[0.2em] text-zinc-500">
-                    <tr className="border-b border-white/8">
-                      <th className="px-4 py-3">Ticker</th>
-                      <th className="px-4 py-3">Company</th>
-                      <th className="px-4 py-3">Market Cap</th>
-                      <th className="px-4 py-3">Report Time</th>
-                      <th className="px-4 py-3">EPS Est vs Actual</th>
-                      <th className="px-4 py-3">Rev Est vs Actual</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredEarnings.map((row) => {
-                      const epsDelta = parseFloat(row.epsActual.replace("$", "")) - parseFloat(row.epsEstimate.replace("$", ""));
-                      const revDelta =
-                        parseFloat(row.revenueActual.replace("$", "").replace("B", "")) -
-                        parseFloat(row.revenueEstimate.replace("$", "").replace("B", ""));
-
-                      return (
-                        <tr key={row.ticker} className="border-b border-white/6 last:border-b-0">
-                          <td className="px-4 py-4 font-mono text-base text-zinc-100">{row.ticker}</td>
-                          <td className="px-4 py-4 text-zinc-200">{row.company}</td>
-                          <td className="px-4 py-4 font-mono text-zinc-300">{formatMarketCap(row.marketCap)}</td>
-                          <td className="px-4 py-4">
-                            <span className="border border-white/8 px-2 py-1 text-xs uppercase tracking-[0.22em] text-zinc-300">
-                              {row.reportTime}
-                            </span>
-                          </td>
-                          <td className="px-4 py-4 font-mono text-zinc-300">
-                            <span className="text-zinc-500">{row.epsEstimate}</span>
-                            <span className="mx-2 text-zinc-600">vs</span>
-                            <span className={epsDelta >= 0 ? "text-emerald-400" : "text-rose-400"}>
-                              {row.epsActual}
-                            </span>
-                            <span className={`ml-2 ${epsDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                              {formatChange(epsDelta)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-4 font-mono text-zinc-300">
-                            <span className="text-zinc-500">{row.revenueEstimate}</span>
-                            <span className="mx-2 text-zinc-600">vs</span>
-                            <span className={revDelta >= 0 ? "text-emerald-400" : "text-rose-400"}>
-                              {row.revenueActual}
-                            </span>
-                            <span className={`ml-2 ${revDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                              {formatChange(revDelta)}B
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="space-y-3 md:hidden">
-                {filteredEarnings.map((row) => {
-                  const epsDelta = parseFloat(row.epsActual.replace("$", "")) - parseFloat(row.epsEstimate.replace("$", ""));
-                  const revDelta =
-                    parseFloat(row.revenueActual.replace("$", "").replace("B", "")) -
-                    parseFloat(row.revenueEstimate.replace("$", "").replace("B", ""));
-
-                  return (
-                    <article key={row.ticker} className="border border-white/8 bg-black/20 px-4 py-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-mono text-lg text-zinc-100">{row.ticker}</div>
-                          <div className="text-sm text-zinc-400">{row.company}</div>
-                        </div>
-                        <span className="border border-white/8 px-2 py-1 text-xs uppercase tracking-[0.22em] text-zinc-300">
-                          {row.reportTime}
-                        </span>
-                      </div>
-                      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                        <div>
-                          <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Market cap</div>
-                          <div className="font-mono text-zinc-200">{formatMarketCap(row.marketCap)}</div>
-                        </div>
-                        <div>
-                          <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">EPS</div>
-                          <div className={`font-mono ${epsDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                            {row.epsEstimate} vs {row.epsActual}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Revenue</div>
-                          <div className={`font-mono ${revDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                            {row.revenueEstimate} vs {row.revenueActual}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Beat / miss</div>
-                          <div className={`font-mono ${epsDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                            {formatChange(epsDelta)} EPS
-                          </div>
-                        </div>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-
-          {activeTab === "Movers" ? (
-            <div id="panel-movers" role="tabpanel" className="space-y-5 outline-none">
-              <SectionHeading title="Movers" />
-
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="border border-white/8">
-                  <div className="border-b border-white/8 px-4 py-3 text-xs uppercase tracking-[0.22em] text-emerald-400">
-                    Gainers
-                  </div>
-                  <div className="divide-y divide-white/6">
-                    {filteredGainers.map((row, index) => (
-                      <article key={row.ticker} className="grid grid-cols-[32px_minmax(0,1fr)_72px] gap-3 px-4 py-4">
-                        <div className="font-mono text-sm text-zinc-500">{index + 1}</div>
-                        <div className="min-w-0">
-                          <div className="flex items-baseline gap-2">
-                            <div className="font-mono text-base text-zinc-100">{row.ticker}</div>
-                            <div className="truncate text-sm text-zinc-500">{row.company}</div>
-                          </div>
-                          <div className="mt-2 h-1.5 bg-white/[0.04]">
-                            <div className="h-full bg-emerald-400/70" style={{ width: `${row.volume}%` }} />
-                          </div>
-                        </div>
-                        <div className="text-right font-mono">
-                          <div className="text-lg text-emerald-400">{formatChange(row.percentChange)}%</div>
-                          <div className="text-xs text-zinc-400">{formatDollarChange(row.dollarChange)}</div>
-                        </div>
-                      </article>
-                    ))}
                   </div>
                 </div>
+              ) : null}
 
-                <div className="border border-white/8">
-                  <div className="border-b border-white/8 px-4 py-3 text-xs uppercase tracking-[0.22em] text-rose-400">
-                    Losers
-                  </div>
-                  <div className="divide-y divide-white/6">
-                    {filteredLosers.map((row, index) => (
-                      <article key={row.ticker} className="grid grid-cols-[32px_minmax(0,1fr)_72px] gap-3 px-4 py-4">
-                        <div className="font-mono text-sm text-zinc-500">{index + 1}</div>
-                        <div className="min-w-0">
-                          <div className="flex items-baseline gap-2">
-                            <div className="font-mono text-base text-zinc-100">{row.ticker}</div>
-                            <div className="truncate text-sm text-zinc-500">{row.company}</div>
-                          </div>
-                          <div className="mt-2 h-1.5 bg-white/[0.04]">
-                            <div className="h-full bg-rose-400/70" style={{ width: `${row.volume}%` }} />
-                          </div>
-                        </div>
-                        <div className="text-right font-mono">
-                          <div className="text-lg text-rose-400">{formatChange(row.percentChange)}%</div>
-                          <div className="text-xs text-zinc-400">{formatDollarChange(row.dollarChange)}</div>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
+              {activeTab === "Options" ? (
+                <div id="panel-options" role="tabpanel" className="space-y-5 outline-none">
+                  <SectionHeading title="Options" />
+
+                  {filteredOptions.length ? (
+                    <>
+                      <div className="hidden overflow-hidden border border-white/8 md:block">
+                        <table className="w-full text-left text-sm">
+                          <thead className="sticky z-10 bg-[#0a0c10] text-xs uppercase tracking-[0.2em] text-zinc-500">
+                            <tr className="border-b border-white/8">
+                              <th className="px-4 py-3">Ticker</th>
+                              <th className="px-4 py-3">Unusual Volume</th>
+                              <th className="px-4 py-3">IV Rank</th>
+                              <th className="px-4 py-3">Put/Call</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredOptions.map((row) => (
+                              <tr key={row.ticker} className="border-b border-white/6 last:border-b-0">
+                                <td className="px-4 py-4">
+                                  <div className="font-mono text-base text-zinc-100">{row.ticker}</div>
+                                  <div className="text-sm text-zinc-500">{row.company}</div>
+                                </td>
+                                <td className="px-4 py-4 font-mono text-zinc-200">{row.unusualVolume}</td>
+                                <td className="px-4 py-4">
+                                  <div className="flex items-center gap-3">
+                                    <SparkBar value={row.ivRank} />
+                                    <span className="font-mono text-zinc-300">{row.ivRank}</span>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-4 font-mono">
+                                  <span className={row.putCallRatio > 1 ? "text-rose-400" : "text-emerald-400"}>
+                                    {row.putCallRatio.toFixed(2)}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="space-y-3 md:hidden">
+                        {filteredOptions.map((row) => (
+                          <article key={row.ticker} className="border border-white/8 bg-black/20 px-4 py-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="font-mono text-lg text-zinc-100">{row.ticker}</div>
+                                <div className="text-sm text-zinc-500">{row.company}</div>
+                              </div>
+                              <div className="font-mono text-sm text-zinc-200">{row.unusualVolume}</div>
+                            </div>
+                            <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
+                              <div>
+                                <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">IV rank</div>
+                                <div className="mt-2 flex items-center gap-3">
+                                  <SparkBar value={row.ivRank} />
+                                  <span className="font-mono text-zinc-300">{row.ivRank}</span>
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Put/Call</div>
+                                <div className={`mt-2 font-mono ${row.putCallRatio > 1 ? "text-rose-400" : "text-emerald-400"}`}>
+                                  {row.putCallRatio.toFixed(2)}
+                                </div>
+                              </div>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <EmptyState message="No live options-flow provider is configured yet." />
+                  )}
                 </div>
-              </div>
-            </div>
-          ) : null}
-
-          {activeTab === "Options" ? (
-            <div id="panel-options" role="tabpanel" className="space-y-5 outline-none">
-              <SectionHeading title="Options" />
-
-              <div className="hidden overflow-hidden border border-white/8 md:block">
-                <table className="w-full text-left text-sm">
-                  <thead className="sticky z-10 bg-[#0a0c10] text-xs uppercase tracking-[0.2em] text-zinc-500">
-                    <tr className="border-b border-white/8">
-                      <th className="px-4 py-3">Ticker</th>
-                      <th className="px-4 py-3">Unusual Volume</th>
-                      <th className="px-4 py-3">IV Rank</th>
-                      <th className="px-4 py-3">Put/Call</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredOptions.map((row) => (
-                      <tr key={row.ticker} className="border-b border-white/6 last:border-b-0">
-                        <td className="px-4 py-4">
-                          <div className="font-mono text-base text-zinc-100">{row.ticker}</div>
-                          <div className="text-sm text-zinc-500">{row.company}</div>
-                        </td>
-                        <td className="px-4 py-4 font-mono text-zinc-200">{row.unusualVolume}</td>
-                        <td className="px-4 py-4">
-                          <div className="flex items-center gap-3">
-                            <SparkBar value={row.ivRank} />
-                            <span className="font-mono text-zinc-300">{row.ivRank}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-4 font-mono">
-                          <span className={row.putCallRatio > 1 ? "text-rose-400" : "text-emerald-400"}>
-                            {row.putCallRatio.toFixed(2)}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="space-y-3 md:hidden">
-                {filteredOptions.map((row) => (
-                  <article key={row.ticker} className="border border-white/8 bg-black/20 px-4 py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-mono text-lg text-zinc-100">{row.ticker}</div>
-                        <div className="text-sm text-zinc-500">{row.company}</div>
-                      </div>
-                      <div className="font-mono text-sm text-zinc-200">{row.unusualVolume}</div>
-                    </div>
-                    <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">IV rank</div>
-                        <div className="mt-2 flex items-center gap-3">
-                          <SparkBar value={row.ivRank} />
-                          <span className="font-mono text-zinc-300">{row.ivRank}</span>
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-600">Put/Call</div>
-                        <div className={`mt-2 font-mono ${row.putCallRatio > 1 ? "text-rose-400" : "text-emerald-400"}`}>
-                          {row.putCallRatio.toFixed(2)}
-                        </div>
-                      </div>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </section>
+              ) : null}
+            </section>
+          </>
+        )}
       </main>
     </div>
   );

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { createSeedDailyReport } from "@/lib/market-report";
+import { createEmptyDailyReport } from "@/lib/market-report";
 import { getDatabase } from "@/lib/mongodb";
 
 export const runtime = "nodejs";
@@ -29,7 +29,7 @@ export async function GET(_request: Request, context: RouteContext) {
   } catch {
     return NextResponse.json(
       {
-        ...createSeedDailyReport(new Date(`${date}T12:00:00Z`)),
+        ...createEmptyDailyReport(new Date(`${date}T12:00:00Z`)),
         warning: "Database unavailable; returning seed fallback data.",
       },
       { status: 200 },

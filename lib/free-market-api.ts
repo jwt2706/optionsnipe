@@ -1,10 +1,10 @@
 import {
-  createSeedDailyReport,
+  todayKey,
   type CalendarEvent,
   type DailyReport,
   type EarningsRow,
   type MoverRow,
-  todayKey,
+  type OptionsRow,
 } from "@/lib/market-report";
 
 type FmpMover = {
@@ -165,11 +165,6 @@ function normalizeMoverRows(rows: MoverRow[]) {
   }));
 }
 
-type LiveSection<T> = {
-  data: T;
-  live: boolean;
-};
-
 function mapEconomicEvent(event: FmpEconomicEvent): CalendarEvent | null {
   const name = event.event ?? event.name;
   if (!name) {
@@ -191,10 +186,6 @@ function mapEconomicEvent(event: FmpEconomicEvent): CalendarEvent | null {
     consensus,
     previous,
     actual,
-    surprise:
-      actual && consensus && actual !== "—" && consensus !== "—"
-        ? undefined
-        : undefined,
   };
 }
 
@@ -272,21 +263,21 @@ function deriveSession(time: string) {
   return "Market hours";
 }
 
-async function fetchMovers(kind: "gainers" | "losers"): Promise<LiveSection<MoverRow[]>> {
+async function fetchMovers(kind: "gainers" | "losers") {
   const rows = await fetchJson<FmpMover[]>(`/stock_market/${kind}`);
-  if (!rows) {
-    return { data: [], live: false };
+  if (!rows?.length) {
+    return null;
   }
 
-  const mapped = (rows ?? []).map(mapMover).filter((row): row is MoverRow => Boolean(row));
-  return { data: normalizeMoverRows(mapped).slice(0, 8), live: true };
+  const mapped = rows.map(mapMover).filter((row): row is MoverRow => Boolean(row));
+  return mapped.length ? normalizeMoverRows(mapped).slice(0, 8) : null;
 }
 
-async function fetchEarnings(date: Date): Promise<LiveSection<EarningsRow[]>> {
+async function fetchEarnings(date: Date) {
   const dateKey = todayKey(date);
   const rows = await fetchJson<FmpEarnings[]>(`/earning_calendar?from=${dateKey}&to=${dateKey}`);
-  if (!rows) {
-    return { data: [], live: false };
+  if (!rows?.length) {
+    return null;
   }
 
   const symbols = [...new Set(rows.map((row) => row.symbol).filter(Boolean))] as string[];
@@ -321,7 +312,7 @@ async function fetchEarnings(date: Date): Promise<LiveSection<EarningsRow[]>> {
     .sort((left, right) => right.marketCap - left.marketCap)
     .slice(0, 10);
 
-  return { data: mapped, live: true };
+  return mapped.length ? mapped : null;
 }
 
 function normalizeEarningsTime(time?: string) {
@@ -342,69 +333,88 @@ function normalizeEarningsTime(time?: string) {
   return time.toUpperCase();
 }
 
-async function fetchEconomicCalendar(date: Date): Promise<LiveSection<CalendarEvent[]>> {
+async function fetchEconomicCalendar(date: Date) {
   const dateKey = todayKey(date);
   const rows = await fetchJson<FmpEconomicEvent[]>(`/economic_calendar?from=${dateKey}&to=${dateKey}`);
-
-  if (!rows) {
-    return { data: [], live: false };
+  if (!rows?.length) {
+    return null;
   }
 
-  const mapped = (rows ?? [])
+  const mapped = rows
     .filter((row) => !row.country || row.country === "US")
     .map(mapEconomicEvent)
     .filter((row): row is CalendarEvent => Boolean(row))
     .filter((row) => row.category !== "Macro" || row.name.toLowerCase().includes("fed"))
     .slice(0, 8);
 
-  return { data: mapped, live: true };
+  return mapped.length ? mapped : null;
 }
 
-function buildHeroFacts(report: DailyReport) {
-  const facts = [...report.heroFacts];
+/**
+ * Unusual-options-activity data isn't available on FMP's free tier, so this
+ * always returns null and the Options tab renders an explicit empty state
+ * instead of made-up IV ranks / put-call ratios. Wire in a real provider
+ * (e.g. an options-flow API) here when you have one.
+ */
+async function fetchOptionsFlow(): Promise<OptionsRow[] | null> {
+  return null;
+}
+
+function buildHeroFacts(report: Pick<DailyReport, "calendarEvents" | "gainers" | "earningsRows">) {
+  const facts: string[] = [];
 
   if (report.calendarEvents[0]) {
-    facts[0] = `${report.calendarEvents[0].name} ${report.calendarEvents[0].time} ET · consensus ${report.calendarEvents[0].consensus}`;
+    facts.push(
+      `${report.calendarEvents[0].name} ${report.calendarEvents[0].time} ET · consensus ${report.calendarEvents[0].consensus}`,
+    );
   }
 
   if (report.gainers[0]) {
-    facts[1] = `${report.gainers[0].ticker} top mover ${report.gainers[0].percentChange > 0 ? "+" : ""}${report.gainers[0].percentChange.toFixed(1)}%`;
+    const top = report.gainers[0];
+    facts.push(`${top.ticker} top mover ${top.percentChange > 0 ? "+" : ""}${top.percentChange.toFixed(1)}%`);
   }
 
   if (report.earningsRows[0]) {
-    facts[2] = `Largest earnings watch: ${report.earningsRows[0].ticker} ${report.earningsRows[0].reportTime}`;
+    facts.push(`Largest earnings watch: ${report.earningsRows[0].ticker} ${report.earningsRows[0].reportTime}`);
   }
-
-  facts[3] = "Market-cap filter ready for $10B+ and $100B+ screens";
 
   return facts;
 }
 
 export async function buildLiveDailyReport(date = new Date()): Promise<DailyReport> {
-  const fallback = createSeedDailyReport(date);
-
-  const [gainers, losers, earningsRows, calendarEvents] = await Promise.all([
+  const [gainers, losers, earningsRows, calendarEvents, optionsRows] = await Promise.all([
     fetchMovers("gainers"),
     fetchMovers("losers"),
     fetchEarnings(date),
     fetchEconomicCalendar(date),
+    fetchOptionsFlow(),
   ]);
 
-  const liveSections = [gainers.live, losers.live, earningsRows.live, calendarEvents.live].filter(Boolean).length;
+  // Options isn't wired to a live provider yet, so only the 4 core sources
+  // count toward "fresh vs partial vs failed".
+  const coreSources = [gainers, losers, earningsRows, calendarEvents];
+  const livePieces = coreSources.filter((piece) => piece !== null).length;
 
   const report: DailyReport = {
-    ...fallback,
-    status: liveSections === 4 ? "fresh" : liveSections > 0 ? "partial" : "failed",
-    source: liveSections > 0 ? "mixed" : "seed",
+    date: todayKey(date),
+    status: livePieces === 0 ? "failed" : livePieces === coreSources.length ? "fresh" : "partial",
+    source: livePieces === 0 ? "empty" : livePieces === coreSources.length ? "live" : "mixed",
     refreshedAt: date.toISOString(),
     lastFetchedAt: date.toISOString(),
-    gainers: gainers.live ? gainers.data : fallback.gainers,
-    losers: losers.live ? losers.data : fallback.losers,
-    earningsRows: earningsRows.live ? earningsRows.data : fallback.earningsRows,
-    calendarEvents: calendarEvents.live ? calendarEvents.data : fallback.calendarEvents,
+    heroFacts: [],
+    calendarEvents: calendarEvents ?? [],
+    earningsRows: earningsRows ?? [],
+    gainers: gainers ?? [],
+    losers: losers ?? [],
+    optionsRows: optionsRows ?? [],
+    marketCapFilter: "10b",
   };
 
   report.heroFacts = buildHeroFacts(report);
+
+  if (!fmpApiKey) {
+    report.heroFacts.unshift("FMP_API_KEY is not set — live market data is disabled.");
+  }
 
   return report;
 }

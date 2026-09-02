@@ -1,4 +1,6 @@
 export type MarketCapFilter = "all" | "10b" | "100b";
+export type ReportStatus = "fresh" | "partial" | "failed";
+export type ReportSource = "live" | "mixed" | "empty";
 
 export type CalendarEvent = {
   time: string;
@@ -40,11 +42,9 @@ export type OptionsRow = {
   putCallRatio: number;
 };
 
-export type ReportSource = "seed" | "mixed" | "live";
-
 export type DailyReport = {
   date: string;
-  status: "fresh" | "partial" | "failed";
+  status: ReportStatus;
   source: ReportSource;
   refreshedAt: string;
   lastFetchedAt: string;
@@ -54,209 +54,46 @@ export type DailyReport = {
   gainers: MoverRow[];
   losers: MoverRow[];
   optionsRows: OptionsRow[];
+  marketCapFilter: MarketCapFilter;
 };
 
 export type DailyReportHistoryEntry = {
   date: string;
   status: DailyReport["status"];
-  source: ReportSource;
+  source: DailyReport["source"];
   refreshedAt: string;
   headline: string;
   topMover: string;
   topEvent: string;
+  marketCapFilter: MarketCapFilter;
 };
 
-const heroFacts = [
-  "CPI 8:30 AM ET · consensus 3.1%",
-  "FOMC: no meeting today",
-  "NVDA top mover +6.2%",
-  "Options flow: elevated call activity in semis",
-];
-
-const calendarEvents: CalendarEvent[] = [
-  {
-    time: "08:30",
-    session: "Pre-market",
-    name: "Core CPI",
-    category: "Macro",
-    consensus: "3.1%",
-    previous: "3.2%",
-    actual: "3.0%",
-    surprise: "-0.1",
-  },
-  {
-    time: "10:00",
-    session: "Market hours",
-    name: "Consumer Sentiment",
-    category: "Survey",
-    consensus: "68.4",
-    previous: "67.1",
-  },
-  {
-    time: "16:05",
-    session: "After close",
-    name: "AAPL earnings",
-    category: "Earnings",
-    consensus: "$1.41 EPS",
-    previous: "$1.29 EPS",
-  },
-];
-
-const earningsRows: EarningsRow[] = [
-  {
-    ticker: "NVDA",
-    company: "NVIDIA",
-    marketCap: 3_400_000_000_000,
-    reportTime: "AMC",
-    epsEstimate: "$1.10",
-    epsActual: "$1.18",
-    revenueEstimate: "$28.7B",
-    revenueActual: "$29.8B",
-  },
-  {
-    ticker: "AAPL",
-    company: "Apple",
-    marketCap: 3_050_000_000_000,
-    reportTime: "AMC",
-    epsEstimate: "$1.41",
-    epsActual: "$1.44",
-    revenueEstimate: "$89.6B",
-    revenueActual: "$90.2B",
-  },
-  {
-    ticker: "META",
-    company: "Meta Platforms",
-    marketCap: 1_330_000_000_000,
-    reportTime: "BMO",
-    epsEstimate: "$4.72",
-    epsActual: "$4.61",
-    revenueEstimate: "$39.1B",
-    revenueActual: "$38.6B",
-  },
-  {
-    ticker: "AMD",
-    company: "Advanced Micro Devices",
-    marketCap: 285_000_000_000,
-    reportTime: "AMC",
-    epsEstimate: "$0.68",
-    epsActual: "$0.74",
-    revenueEstimate: "$6.8B",
-    revenueActual: "$7.1B",
-  },
-];
-
-const gainers: MoverRow[] = [
-  {
-    ticker: "NVDA",
-    company: "NVIDIA",
-    marketCap: 3_400_000_000_000,
-    percentChange: 6.2,
-    dollarChange: 81.43,
-    volume: 92,
-  },
-  {
-    ticker: "AMD",
-    company: "Advanced Micro Devices",
-    marketCap: 285_000_000_000,
-    percentChange: 4.1,
-    dollarChange: 6.73,
-    volume: 67,
-  },
-  {
-    ticker: "MU",
-    company: "Micron",
-    marketCap: 145_000_000_000,
-    percentChange: 3.5,
-    dollarChange: 5.18,
-    volume: 54,
-  },
-];
-
-const losers: MoverRow[] = [
-  {
-    ticker: "TSLA",
-    company: "Tesla",
-    marketCap: 700_000_000_000,
-    percentChange: -4.4,
-    dollarChange: -12.87,
-    volume: 88,
-  },
-  {
-    ticker: "SNAP",
-    company: "Snap",
-    marketCap: 18_000_000_000,
-    percentChange: -3.1,
-    dollarChange: -0.52,
-    volume: 41,
-  },
-  {
-    ticker: "UBER",
-    company: "Uber Technologies",
-    marketCap: 165_000_000_000,
-    percentChange: -2.7,
-    dollarChange: -2.18,
-    volume: 58,
-  },
-];
-
-const optionsRows: OptionsRow[] = [
-  {
-    ticker: "NVDA",
-    company: "NVIDIA",
-    marketCap: 3_400_000_000_000,
-    unusualVolume: "12.4x avg",
-    ivRank: 61,
-    putCallRatio: 0.71,
-  },
-  {
-    ticker: "AAPL",
-    company: "Apple",
-    marketCap: 3_050_000_000_000,
-    unusualVolume: "5.8x avg",
-    ivRank: 38,
-    putCallRatio: 0.94,
-  },
-  {
-    ticker: "TSLA",
-    company: "Tesla",
-    marketCap: 700_000_000_000,
-    unusualVolume: "9.1x avg",
-    ivRank: 74,
-    putCallRatio: 1.18,
-  },
-  {
-    ticker: "AMD",
-    company: "Advanced Micro Devices",
-    marketCap: 285_000_000_000,
-    unusualVolume: "7.3x avg",
-    ivRank: 52,
-    putCallRatio: 0.86,
-  },
-];
-
 export function todayKey(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
+  return date.toISOString().slice(0, 10);
 }
 
-export function createSeedDailyReport(date = new Date()): DailyReport {
+/**
+ * A structurally-valid DailyReport with every array empty. This is NOT
+ * sample data — it's what the API returns when neither MongoDB nor any
+ * live market source produced anything for a date. The UI is expected to
+ * render explicit "no data" states around it.
+ */
+export function createEmptyDailyReport(date = new Date()): DailyReport {
   const timestamp = date.toISOString();
 
   return {
     date: todayKey(date),
-    status: "fresh",
-    source: "seed",
+    status: "failed",
+    source: "empty",
     refreshedAt: timestamp,
     lastFetchedAt: timestamp,
-    heroFacts,
-    calendarEvents,
-    earningsRows,
-    gainers,
-    losers,
-    optionsRows,
+    heroFacts: [],
+    calendarEvents: [],
+    earningsRows: [],
+    gainers: [],
+    losers: [],
+    optionsRows: [],
+    marketCapFilter: "10b",
   };
 }
 
@@ -266,14 +103,13 @@ export function buildHistoryEntry(report: DailyReport): DailyReportHistoryEntry 
     status: report.status,
     source: report.source,
     refreshedAt: report.refreshedAt,
-    headline: report.heroFacts[0] ?? "Daily market brief",
-    topMover:
-      report.gainers[0]
-        ? `${report.gainers[0].ticker} +${report.gainers[0].percentChange.toFixed(1)}%`
-        : "No mover data",
-    topEvent:
-      report.calendarEvents[0]
-        ? `${report.calendarEvents[0].time} ${report.calendarEvents[0].name}`
-        : "No calendar event",
+    headline: report.heroFacts[0] ?? "No brief generated",
+    topMover: report.gainers[0]
+      ? `${report.gainers[0].ticker} +${report.gainers[0].percentChange.toFixed(1)}%`
+      : "No mover data",
+    topEvent: report.calendarEvents[0]
+      ? `${report.calendarEvents[0].time} ${report.calendarEvents[0].name}`
+      : "No calendar event",
+    marketCapFilter: report.marketCapFilter,
   };
 }
