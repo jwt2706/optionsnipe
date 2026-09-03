@@ -8,7 +8,6 @@ declare global {
 }
 
 let clientPromise: Promise<MongoClient> | undefined;
-
 let indexesPromise: Promise<void> | null = null;
 
 const clientOptions: MongoClientOptions = {
@@ -17,12 +16,36 @@ const clientOptions: MongoClientOptions = {
   serverSelectionTimeoutMS: 10_000,
 };
 
+function describeError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// Logs the host/db only, never the credentials in the URI.
+function redactUri(uri: string) {
+  try {
+    const parsed = new URL(uri.replace(/^mongodb(\+srv)?:\/\//, "https://"));
+    return `mongodb${uri.startsWith("mongodb+srv") ? "+srv" : ""}://${parsed.hostname}${parsed.pathname}`;
+  } catch {
+    return "<unparseable MONGODB_URI>";
+  }
+}
+
+function logMongoError(context: string, error: unknown) {
+  console.error(`[mongodb] ${context}: ${describeError(error)}`);
+}
+
 async function ensureIndexes(db: Db) {
   if (!indexesPromise) {
     indexesPromise = Promise.all([
       db.collection("dailyReports").createIndex({ date: 1 }, { unique: true }),
       db.collection("refreshLocks").createIndex({ date: 1 }, { unique: true }),
-    ]).then(() => undefined);
+    ])
+      .then(() => undefined)
+      .catch((error) => {
+        logMongoError("failed to create indexes", error);
+        indexesPromise = null; // allow retry on next call
+        throw error;
+      });
   }
 
   await indexesPromise;
@@ -33,33 +56,48 @@ export async function getDatabase() {
     const uri = process.env.MONGODB_URI;
 
     if (!uri) {
-      throw new Error("Missing MONGODB_URI environment variable");
+      const error = new Error(
+        "Missing MONGODB_URI environment variable. Set it in Vercel → Project → Settings → Environment Variables " +
+          "for the environment you're testing (Production/Preview/Development), then redeploy.",
+      );
+      logMongoError("configuration error", error);
+      throw error;
     }
 
+    console.log(`[mongodb] connecting to ${redactUri(uri)}`);
+
     if (!clientPromise) {
-      const connectionPromise = globalThis.__mongoClientPromise ?? new MongoClient(uri, clientOptions).connect();
+      const connectionPromise = (globalThis.__mongoClientPromise ?? new MongoClient(uri, clientOptions).connect()).catch(
+        (error: unknown) => {
+          logMongoError("connection failed (check Atlas Network Access + credentials)", error);
+          throw error;
+        },
+      );
 
       clientPromise = connectionPromise.catch((error) => {
+        // Clear the cache on failure so the NEXT request retries instead of reusing a dead promise.
         clientPromise = undefined;
-
-        if (process.env.NODE_ENV !== "production") {
-          globalThis.__mongoClientPromise = undefined;
-        }
-
+        globalThis.__mongoClientPromise = undefined;
         throw error;
       });
 
-      if (process.env.NODE_ENV !== "production") {
-        globalThis.__mongoClientPromise = clientPromise;
-      }
+      globalThis.__mongoClientPromise = clientPromise;
     }
 
-    globalThis.__mongoDatabasePromise = clientPromise.then(async (connectedClient) => {
-      const configuredDatabase = process.env.MONGODB_DB;
-      const database = configuredDatabase ? connectedClient.db(configuredDatabase) : connectedClient.db();
-      await ensureIndexes(database);
-      return database;
-    });
+    globalThis.__mongoDatabasePromise = clientPromise
+      .then(async (connectedClient) => {
+        const configuredDatabase = process.env.MONGODB_DB;
+        const database = configuredDatabase ? connectedClient.db(configuredDatabase) : connectedClient.db();
+        await ensureIndexes(database);
+        console.log("[mongodb] connected and indexes ready");
+        return database;
+      })
+      .catch((error) => {
+        // Critical: clear this too, or every future call replays the same dead promise forever.
+        globalThis.__mongoDatabasePromise = undefined;
+        logMongoError("failed to resolve database", error);
+        throw error;
+      });
   }
 
   return globalThis.__mongoDatabasePromise;

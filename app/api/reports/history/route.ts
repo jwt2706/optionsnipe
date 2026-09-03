@@ -11,8 +11,11 @@ function parseLimit(value: string | null) {
   if (!Number.isFinite(parsed) || parsed < 1) {
     return 5;
   }
-
   return Math.min(parsed, 20);
+}
+
+function describeError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function GET(request: Request) {
@@ -34,10 +37,10 @@ export async function GET(request: Request) {
     );
 
     return NextResponse.json({ history });
-  } catch {
-    return NextResponse.json({
-      history: [] as DailyReportHistoryEntry[],
-      warning: "Database unavailable; report history could not be loaded.",
-    });
+  } catch (error) {
+    const message = describeError(error);
+    console.error(`[api/reports/history] database read failed: ${message}`);
+
+    return NextResponse.json({ history: [] as DailyReportHistoryEntry[], debugError: message });
   }
 }

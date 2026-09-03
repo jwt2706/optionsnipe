@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { buildLiveDailyReport } from "@/lib/free-market-api";
+import { createSeedDailyReport } from "@/lib/market-report";
 import { getDatabase } from "@/lib/mongodb";
 
 export const runtime = "nodejs";
@@ -10,8 +11,11 @@ function todayKey(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
-
   return `${year}-${month}-${day}`;
+}
+
+function describeError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function GET() {
@@ -29,13 +33,13 @@ export async function GET() {
     await database.collection("dailyReports").insertOne(liveReport);
 
     return NextResponse.json(liveReport, { status: 201 });
-  } catch {
-    const liveReport = await buildLiveDailyReport().catch(() => null);
+  } catch (error) {
+    const message = describeError(error);
+    console.error(`[api/reports/today] database operation failed: ${message}`);
 
-    if (liveReport) {
-      return NextResponse.json(liveReport, { status: 200 });
-    }
-
-    return NextResponse.json({ error: "Live market data and database are both unavailable" }, { status: 503 });
+    return NextResponse.json(
+      { ...createSeedDailyReport(), status: "failed" as const, debugError: message },
+      { status: 200 },
+    );
   }
 }

@@ -23,6 +23,10 @@ async function resolveRequestedDate(request: Request) {
   }
 }
 
+function describeError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function POST(request: Request) {
   const now = new Date();
   const date = await resolveRequestedDate(request);
@@ -43,61 +47,40 @@ export async function POST(request: Request) {
       );
 
       return NextResponse.json(
-        {
-          error: "Refresh recently triggered",
-          retryAfterSeconds,
-        },
-        {
-          status: 429,
-          headers: {
-            "Retry-After": String(retryAfterSeconds),
-          },
-        },
+        { error: "Refresh recently triggered", retryAfterSeconds },
+        { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
       );
     }
 
     await Promise.all([
       database.collection("dailyReports").updateOne(
         { date },
-        {
-          $set: report,
-          $setOnInsert: {
-            date,
-          },
-        },
+        { $set: report, $setOnInsert: { date } },
         { upsert: true },
       ),
       locks.updateOne(
         { date },
         {
-          $set: {
-            date,
-            lockedUntil,
-            updatedAt: refreshedAt,
-          },
-          $setOnInsert: {
-            createdAt: refreshedAt,
-          },
+          $set: { date, lockedUntil, updatedAt: refreshedAt },
+          $setOnInsert: { createdAt: refreshedAt },
         },
         { upsert: true },
       ),
     ]);
-  } catch {
+  } catch (error) {
+    const message = describeError(error);
+    console.error(`[api/refresh] database write failed for date=${date}: ${message}`);
+
     return NextResponse.json(
       {
         report,
         lockedUntil,
         warning: "Database unavailable; report was not persisted.",
+        debugError: message,
       },
       { status: 200 },
     );
   }
 
-  return NextResponse.json(
-    {
-      report,
-      lockedUntil,
-    },
-    { status: 200 },
-  );
+  return NextResponse.json({ report, lockedUntil }, { status: 200 });
 }

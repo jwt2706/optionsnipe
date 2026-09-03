@@ -78,7 +78,7 @@ export function todayKey(date = new Date()) {
  * live market source produced anything for a date. The UI is expected to
  * render explicit "no data" states around it.
  */
-export function createEmptyDailyReport(date = new Date()): DailyReport {
+export function createSeedDailyReport(date = new Date()): DailyReport {
   const timestamp = date.toISOString();
 
   return {
