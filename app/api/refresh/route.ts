@@ -55,7 +55,7 @@ export async function POST(request: Request) {
     await Promise.all([
       database.collection("dailyReports").updateOne(
         { date },
-        { $set: report, $setOnInsert: { date } },
+        { $set: report },
         { upsert: true },
       ),
       locks.updateOne(
