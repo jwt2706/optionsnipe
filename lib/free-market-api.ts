@@ -56,7 +56,7 @@ type FmpEconomicEvent = {
 };
 
 const fmpApiKey = process.env.FMP_API_KEY;
-const fmpBaseUrl = process.env.FMP_BASE_URL ?? "https://financialmodelingprep.com/api/v3";
+const fmpBaseUrl = process.env.FMP_BASE_URL ?? "https://financialmodelingprep.com/stable";
 
 function toNumber(value: unknown) {
   if (typeof value === "number") {
