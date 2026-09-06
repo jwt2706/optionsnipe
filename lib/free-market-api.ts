@@ -115,22 +115,73 @@ function buildUrl(path: string) {
   return url;
 }
 
+function redact(url: URL) {
+  return url.toString().replace(/apikey=[^&]+/, "apikey=REDACTED");
+}
+
+function isErrorPayload(data: unknown): data is { "Error Message": string } {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    !Array.isArray(data) &&
+    "Error Message" in (data as Record<string, unknown>)
+  );
+}
+
+/**
+ * Fetches a JSON payload from FMP. Every failure path (missing key, network
+ * error, non-2xx response, or a 200 that actually carries an FMP error
+ * payload) is logged via console.error so it shows up in the same Vercel
+ * function logs as the calling API route — nothing fails silently here.
+ */
 async function fetchJson<T>(path: string): Promise<T | null> {
   if (!fmpApiKey) {
+    console.error(`[fmp] FMP_API_KEY is not set; skipping fetch for ${path}`);
     return null;
   }
 
+  const url = buildUrl(path);
+  const redactedUrl = redact(url);
+
+  let response: Response;
   try {
-    const response = await fetch(buildUrl(path), { cache: "no-store" });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    return (await response.json()) as T;
-  } catch {
+    response = await fetch(url, { cache: "no-store" });
+  } catch (error) {
+    console.error(
+      `[fmp] network error fetching ${redactedUrl}:`,
+      error instanceof Error ? error.message : error,
+    );
     return null;
   }
+
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => "<unreadable body>");
+    console.error(
+      `[fmp] ${response.status} ${response.statusText} for ${redactedUrl} :: ${bodyText.slice(0, 500)}`,
+    );
+    return null;
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch (error) {
+    console.error(
+      `[fmp] failed to parse JSON from ${redactedUrl}:`,
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+
+  // FMP sometimes returns 200 OK with an { "Error Message": "..." } body
+  // instead of the expected array — e.g. for premium-only endpoints hit
+  // with a free-tier key, or a malformed query.
+  if (isErrorPayload(data)) {
+    console.error(`[fmp] API error payload from ${redactedUrl} :: ${data["Error Message"]}`);
+    return null;
+  }
+
+  return data as T;
 }
 
 function mapMover(row: FmpMover): MoverRow | null {
@@ -264,7 +315,8 @@ function deriveSession(time: string) {
 }
 
 async function fetchMovers(kind: "gainers" | "losers") {
-  const rows = await fetchJson<FmpMover[]>(`/stock_market/${kind}`);
+  const endpoint = kind === "gainers" ? "biggest-gainers" : "biggest-losers";
+  const rows = await fetchJson<FmpMover[]>(`/${endpoint}`);
   if (!rows?.length) {
     return null;
   }
@@ -275,13 +327,15 @@ async function fetchMovers(kind: "gainers" | "losers") {
 
 async function fetchEarnings(date: Date) {
   const dateKey = todayKey(date);
-  const rows = await fetchJson<FmpEarnings[]>(`/earning_calendar?from=${dateKey}&to=${dateKey}`);
+  const rows = await fetchJson<FmpEarnings[]>(`/earnings-calendar?from=${dateKey}&to=${dateKey}`);
   if (!rows?.length) {
     return null;
   }
 
   const symbols = [...new Set(rows.map((row) => row.symbol).filter(Boolean))] as string[];
-  const quotes = symbols.length ? await fetchJson<FmpQuote[]>(`/quote/${symbols.join(",")}`) : null;
+  const quotes = symbols.length
+    ? await fetchJson<FmpQuote[]>(`/quote?symbol=${symbols.join(",")}`)
+    : null;
   const quoteMap = new Map((quotes ?? []).map((quote) => [quote.symbol ?? "", quote]));
 
   const mapped: EarningsRow[] = rows
@@ -335,7 +389,7 @@ function normalizeEarningsTime(time?: string) {
 
 async function fetchEconomicCalendar(date: Date) {
   const dateKey = todayKey(date);
-  const rows = await fetchJson<FmpEconomicEvent[]>(`/economic_calendar?from=${dateKey}&to=${dateKey}`);
+  const rows = await fetchJson<FmpEconomicEvent[]>(`/economic-calendar?from=${dateKey}&to=${dateKey}`);
   if (!rows?.length) {
     return null;
   }
