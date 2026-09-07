@@ -113,3 +113,91 @@ export function buildHistoryEntry(report: DailyReport): DailyReportHistoryEntry 
     marketCapFilter: report.marketCapFilter,
   };
 }
+
+/**
+ * Shared macro-event categorization, used by every calendar data source
+ * (FMP, Finnhub, or anything else added later) so events look consistent
+ * in the UI regardless of provider.
+ */
+export function deriveEconomicCategory(normalizedName: string) {
+  if (normalizedName.includes("cpi") || normalizedName.includes("inflation") || normalizedName.includes("ppi")) {
+    return "Inflation";
+  }
+
+  if (
+    normalizedName.includes("job") ||
+    normalizedName.includes("employment") ||
+    normalizedName.includes("payroll") ||
+    normalizedName.includes("unemployment")
+  ) {
+    return "Labor";
+  }
+
+  if (normalizedName.includes("fed") || normalizedName.includes("fomc") || normalizedName.includes("interest rate")) {
+    return "Fed";
+  }
+
+  if (
+    normalizedName.includes("gdp") ||
+    normalizedName.includes("retail sales") ||
+    normalizedName.includes("consumer confidence")
+  ) {
+    return "Growth";
+  }
+
+  if (normalizedName.includes("speech") || normalizedName.includes("talk") || normalizedName.includes("testimony")) {
+    return "Fed Speech";
+  }
+
+  return "Macro";
+}
+
+export function deriveEconomicEventTime(normalizedName: string, rawTime?: string) {
+  if (rawTime && rawTime !== "") {
+    return rawTime;
+  }
+
+  if (
+    normalizedName.includes("cpi") ||
+    normalizedName.includes("ppi") ||
+    normalizedName.includes("employment") ||
+    normalizedName.includes("jobs")
+  ) {
+    return "08:30";
+  }
+
+  if (normalizedName.includes("fomc") || normalizedName.includes("interest rate") || normalizedName.includes("fed rate")) {
+    return "14:00";
+  }
+
+  if (normalizedName.includes("speech") || normalizedName.includes("testimony")) {
+    return "13:00";
+  }
+
+  if (normalizedName.includes("retail sales") || normalizedName.includes("consumer confidence")) {
+    return "10:00";
+  }
+
+  return "All day";
+}
+
+export function deriveSession(time: string) {
+  if (time === "All day") {
+    return "All day";
+  }
+
+  const hour = Number.parseInt(time.slice(0, 2), 10);
+  if (Number.isNaN(hour)) {
+    return "Market hours";
+  }
+
+  if (hour < 9 || (hour === 9 && Number.parseInt(time.slice(3, 5), 10) < 30)) {
+    return "Pre-market";
+  }
+
+  if (hour >= 16) {
+    return "After close";
+  }
+
+  return "Market hours";
+}
